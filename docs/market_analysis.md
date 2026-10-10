@@ -1,10 +1,14 @@
-Project: MIRAGE
+\# MIRAGE — Market Analysis
 
-Industry: Cybersecurity / Deception Technology / AI-Assisted Threat Detection
 
-Target Market: European SMEs, mid-sized businesses and Managed Security Service Providers (MSSPs)
 
-Research Date: October 2026
+\*\*Project:\*\* MIRAGE  
+
+\*\*Industry:\*\* Cybersecurity / Deception Technology / AI-Assisted Threat Detection  
+
+\*\*Target market:\*\* European SMEs, mid-sized businesses and Managed Security Service Providers (MSSPs)  
+
+\*\*Research date:\*\* October 2026
 
 
 
@@ -12,7 +16,7 @@ MIRAGE protects a company's most sensitive files against data theft: when an int
 
 
 
-Executive summary
+\## 1. Executive summary
 
 
 
@@ -20,17 +24,23 @@ The project targets a real, growing and consolidating market: deception technolo
 
 
 
-The threat has shifted to data theft. More than 76% of ransomware attacks involved data exfiltration in Q3 2025 (Coveware). Backups do not undo a leak.
-
-Attackers are becoming AI agents. In the GTG-1002 campaign, AI ran about 80–90% of tactical operations at several requests per second (Anthropic).
-
-Big vendors have absorbed the deception pioneers. SentinelOne bought Attivo (\~USD 617 million, 2022), Proofpoint bought Illusive (2022), Zscaler bought Smokescreen (2021). Deception now ships as a feature of large platforms aimed at large enterprises.
-
-The gap: existing deception products detect the intruder but leave the real files exposed. We found no commercial product that takes the real data out of reach the moment a trap is touched.
-
-The most exposed buyers are under-served: mid-size organisations holding sensitive data, now pulled into NIS2 (\~15,000 entities in France), which increasingly outsource security to managed providers.
+\- \*\*The threat has shifted to data theft.\*\* More than 76% of ransomware attacks involved data exfiltration in Q3 2025 (Coveware). Backups do not undo a leak.
 
 
+
+\- \*\*Attackers are becoming AI agents.\*\* In the GTG-1002 campaign, AI ran about 80–90% of tactical operations at several requests per second (Anthropic).
+
+
+
+\- \*\*Big vendors have absorbed the deception pioneers.\*\* SentinelOne bought Attivo (\~USD 617 million, 2022), Proofpoint bought Illusive (2022), Zscaler bought Smokescreen (2021). Deception now ships as a feature of large platforms aimed at large enterprises.
+
+
+
+\- \*\*The gap:\*\* existing deception products detect the intruder but leave the real files exposed. We found no commercial product that takes the real data out of reach the moment a trap is touched.
+
+
+
+\- \*\*The most exposed buyers are under-served:\*\* mid-size organisations holding sensitive data, now pulled into NIS2 (\~15,000 entities in France), which increasingly outsource security to managed providers.
 
 
 
@@ -76,6 +86,8 @@ The buying context is the SOC: tools like this are run by the security team or b
 
 Within deception, Allied Market Research expects small and mid-size enterprises to be the fastest-growing segment, while large enterprises hold the largest share today. IMARC links SME adoption to low initial costs. These are analyst estimates with different scopes and base years, so they should be quoted as ranges.
 
+
+
 \## 4. Drivers and trends
 
 
@@ -97,6 +109,8 @@ Within deception, Allied Market Research expects small and mid-size enterprises 
 
 
 \*\*Healthcare examples:\*\* the 2024 Change Healthcare breach reached 192.7 million people. In France, ANSSI recorded 30 ransomware compromises of health facilities in 2022–2023, about 10% of ransomware incidents reported to it.
+
+
 
 \## 5. Competitors
 
@@ -252,7 +266,11 @@ Recommended first target: \*\*mid-size healthcare organisations under NIS2, reac
 
 \- \*\*Second wave:\*\* legal, accounting and payroll firms (concentrated sensitive files, small teams).
 
+
+
 \- \*\*Channel:\*\* MSSPs and MDR providers; one partner gives access to many mid-size clients, and the European MSS market grows \~15% a year.
+
+
 
 \- \*\*Not first:\*\* large enterprises (served by incumbents) and very small businesses (mostly outside NIS2).
 
@@ -370,45 +388,81 @@ The project's own price is not set yet.
 
 
 
+\---
+
+
+
 \## Sources
 
 
 
 \- \[IMARC — Global deception technology market](https://www.imarcgroup.com/global-deception-technology-market)
 
+
+
 \- \[Allied Market Research — Deception technology market](https://alliedmarketresearch.com/press-release/deception-technology-market.html)
+
+
 
 \- \[Market Data Forecast — Europe managed security services market](https://www.marketdataforecast.com/market-reports/europe-managed-security-services-market)
 
+
+
 \- \[BleepingComputer — Coveware Q3 2025 ransomware data](https://www.bleepingcomputer.com/news/security/ransomware-profits-drop-as-victims-stop-paying-hackers/amp)
+
+
 
 \- \[HIPAA Journal — IBM Cost of a Data Breach 2025, healthcare](https://www.hipaajournal.com/average-cost-of-a-healthcare-data-breach-2025/)
 
+
+
 \- \[Anthropic — Disrupting the first reported AI-orchestrated cyber espionage campaign](https://www-cdn.anthropic.com/d7dd50dd1185f59be051b307150d877f2b82bd2c.pdf)
+
+
 
 \- \[CyberInsider — Change Healthcare breach revised to 192.7 million](https://cyberinsider.com/change-healthcare-revises-breach-impact-to-192-7-million-individuals/)
 
+
+
 \- \[IT-Connect — ANSSI: 30 French hospitals hit by ransomware in two years](https://www.it-connect.fr/30-hopitaux-francais-victimes-ransomware-en-2-ans-rapport-anssi/)
+
+
 
 \- \[Numeum — NIS2 in France](https://numeum.fr/en/cybersecurity/nis2-directive-understanding-the-new-european-cybersecurity-framework-and-its-impact-on-businesses-in-france/)
 
+
+
 \- \[nisd2.eu — What is NIS2](https://nisd2.eu/en/what-is-nis2)
+
+
 
 \- \[TechTarget — SentinelOne acquires Attivo Networks](https://www.techtarget.com/cybersecurity/news/252514653/SentinelOne-acquires-Attivo-Networks-for-617M)
 
+
+
 \- \[SecurityWeek — Proofpoint buys Illusive Networks](https://www.securityweek.com/proofpoint-buys-deception-tech-startup-illusive-networks)
+
+
 
 \- \[Zscaler — Zscaler to acquire Smokescreen](https://www.zscaler.com/press/zscaler-acquire-smokescreen-enhance-zscaler-zero-trust-exchange-advanced-active-defense)
 
+
+
 \- \[TechCrunch — Acalvio emerges with USD 17 M](https://techcrunch.com/2016/07/26/acalvio-emerges-from-stealth-with-17m-to-bring-its-deception-based-cybersecurity-system-to-market)
+
+
 
 \- \[Tech.eu — CounterCraft raises USD 5 M](https://tech.eu/2020/06/17/countercraft-fundraise/)
 
+
+
 \- \[Vendr — Thinkst Canary pricing](https://vendr.com/buyer-guides/thinkst-canary)
+
+
 
 \- \[Dark Reading — Allure Security data loss detection platform](https://www.darkreading.com/endpoint-security/allure-security-unveils-data-loss-detection-and-response-platform)
 
+
+
 \- \[arXiv — Hacking Back the AI-Hacker (Mantis)](https://arxiv.org/html/2410.20911v2)
-
-
 
