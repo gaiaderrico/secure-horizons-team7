@@ -12,7 +12,8 @@ services:
       - "2222:22"
     volumes:
       - srv:/srv                    # share + stage + vault_tmp (one filesystem: atomic rename)
-      - cmdlog:/var/log/mirage      # commands.jsonl, tailed by the guard
+      - cmdlog:/var/log/mirage      # commands.jsonl: root-only, written by the guard only
+      - run:/run/mirage             # guard's command socket (cmd.sock), mirage-shell reports here
       - ./keys:/keys:ro             # optional test key (keys/test_key.pub), git-ignored
     networks:
       mirage:
@@ -27,6 +28,8 @@ services:
     # (contracts.GUARD_CONTROL_URL). Same PID namespace: Contain can kill sessions.
     network_mode: "service:victim"
     pid: "service:victim"
+    # Read the victim sshd's socket fds (sshd is non-dumpable) to find a session's source IP.
+    cap_add: [SYS_PTRACE]
     depends_on: [victim]
     environment:
       CORE_URL: ${CORE_URL:-http://internal-api.lumen.local}
@@ -34,6 +37,7 @@ services:
     volumes:
       - srv:/srv
       - cmdlog:/var/log/mirage
+      - run:/run/mirage             # the guard listens on /run/mirage/cmd.sock
       - vault:/vault                # real files during containment; NOT mounted in the victim
       - mirage-etc:/etc/mirage      # manifest.json; NOT mounted in the victim
       - ./generated:/seed:ro        # Thomas's prepare output (manifest.json, share/, stage/)
@@ -63,6 +67,7 @@ networks:
 volumes:
   srv:
   cmdlog:
+  run:
   vault:
   mirage-etc:
   core-data:

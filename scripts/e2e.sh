@@ -27,6 +27,12 @@ for c in id hostname "ls -la share"; do $SSH "$c" >/dev/null; done
 after=$(docker compose exec -T guard sh -c 'wc -l < /var/log/mirage/commands.jsonl')
 [ $((after - before)) -eq 3 ] || fail "expected 3 new log lines, got $((after - before))"
 docker compose exec -T guard tail -n 3 /var/log/mirage/commands.jsonl
+# the guard must have identified each one: user, session and source IP all set
+docker compose exec -T guard python -c '
+import json
+for r in [json.loads(x) for x in open("/var/log/mirage/commands.jsonl").readlines()[-3:]]:
+    assert r["user"] == "svc_backup" and r["session"].startswith("s-") and r["src_ip"], r
+' || fail "command records missing user/session/src_ip"
 
 for i in $(seq 1 "$ROUNDS"); do
   echo "== round $i, test 3: open the mine -> swap"
@@ -96,4 +102,47 @@ $SSH id >/dev/null || fail "svc_backup cannot log in after /restore"
 [ "$($SSH "md5sum $JEWEL" | cut -d' ' -f1)" = "$REAL" ] || fail "jewel not restored by /restore"
 docker compose exec -T guard python guard.py check || fail "leftovers after /restore"
 
-echo "ALL PASSED ($ROUNDS rounds + control API)"
+echo "== test 6: the attacker can't forge, overwrite or truncate the command log"
+LOG=/var/log/mirage/commands.jsonl
+lines() { docker compose exec -T guard sh -c "wc -l < $LOG" | tr -d '\r '; }
+n0=$(lines)
+for attempt in "echo '{\"user\": \"jdupont\", \"cmd\": \"FORGED\"}' >> $LOG" ": > $LOG" "truncate -s 0 $LOG" "cat $LOG"; do
+  err=$($SSH "$attempt" 2>&1 >/dev/null) && fail "svc_backup could run: $attempt"
+  case "$err" in *"Permission denied"*) echo "svc_backup: $attempt -> Permission denied" ;;
+                 *) fail "expected Permission denied for '$attempt', got: $err" ;; esac
+done
+n1=$(lines)
+[ "$n1" -eq $((n0 + 4)) ] || fail "log went from $n0 to $n1 lines, expected +4 (the guard's own records)"
+# the attempt's own record has the text JSON-escaped (\"cmd\"), so this only matches a forged line
+docker compose exec -T guard grep -qF '"cmd": "FORGED"' $LOG && fail "forged record in log"
+echo "log only grew by the guard's 4 records of those attempts"
+
+# Talk to the socket directly, claiming to be jdupont in another session, and fake the env too.
+TAG="SPOOF-$$-$RANDOM"
+$SSH "python3 -" <<PY || fail "spoof script"
+import json, socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect("/run/mirage/cmd.sock")
+s.sendall(json.dumps({"cmd": "$TAG-raw", "user": "jdupont", "session": "s-evil", "src_ip": "6.6.6.6",
+                      "uid": 1002, "ts": 0}).encode() + b"\n")
+print("guard said", s.recv(16))
+PY
+$SSH "env USER=jdupont SSH_CONNECTION='6.6.6.6 1 2 22' MIRAGE_SID=s-evil python3 /usr/local/lib/mirage/cmdlog.py $TAG-env exec" \
+  || fail "env spoof"
+docker compose exec -T guard python - "$TAG" <<'PY' || fail "spoofed identity accepted"
+import json, sys
+tag = sys.argv[1]
+recs = [json.loads(x) for x in open("/var/log/mirage/commands.jsonl")]
+# each spoofed record vs the guard's record of the ssh command that sent it (same connection)
+for kind, sent_by in (("raw", lambda c: c == "python3 -"), ("env", lambda c: c.startswith("env USER=jdupont"))):
+    i = next(i for i, r in enumerate(recs) if r["cmd"] == f"{tag}-{kind}")
+    r = recs[i]
+    o = next(x for x in reversed(recs[:i]) if sent_by(x["cmd"]))
+    assert (r["user"], r["uid"]) == ("svc_backup", 1001), r
+    assert r["session"] == o["session"] and r["session"] not in ("", "s-evil"), (r, o)
+    assert r["src_ip"] == o["src_ip"] and r["src_ip"] not in ("", "6.6.6.6"), (r, o)
+    assert r["ts"] > 1e9, r
+    print(f"{kind} spoof logged as user={r['user']} session={r['session']} src={r['src_ip']} (claims ignored)")
+PY
+
+echo "ALL PASSED ($ROUNDS rounds + control API + log integrity)"

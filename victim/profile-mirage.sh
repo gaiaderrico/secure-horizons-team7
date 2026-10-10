@@ -1,5 +1,5 @@
 # MIRAGE: log every interactive command (sessions started by mirage-shell only).
-if [ -n "$MIRAGE_SID" ] && [ -n "$BASH_VERSION" ]; then
+if [ -n "$MIRAGE_SESSION" ] && [ -n "$BASH_VERSION" ]; then
   __mirage_log() {
     local n c
     read -r n c <<< "$(HISTTIMEFORMAT= history 1)"

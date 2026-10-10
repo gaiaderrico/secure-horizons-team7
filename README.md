@@ -32,9 +32,11 @@ ssh -p 2222 svc_backup@localhost  # password = VICTIM_PASSWORD (jdupont works to
 ```
 
 - **victim** (`lumen-fs01`, port 2222): SSH file server. Every command (exec, interactive, scp) goes
-  through `victim/mirage-shell` and lands in `/var/log/mirage/commands.jsonl`. The share is `/srv/share`
-  (`~/share`, `~/company`).
-- **guard**: tails the log, POSTs every event to core (`CORE_URL/events`, fail soft), and swaps the
+  through `victim/mirage-shell`, which reports it to the guard's unix socket `/run/mirage/cmd.sock`.
+  The share is `/srv/share` (`~/share`, `~/company`).
+- **guard**: identifies who sent each command itself (socket peer uid + the victim's process tree up to
+  the root-owned sshd of that connection: user, session, source IP), and is the only writer of
+  `/var/log/mirage/commands.jsonl` (root, 600). It POSTs every event to core (`CORE_URL/events`, fail soft), and swaps the
   crown jewels for their fakes as soon as a mine is opened (by name in a command, or any read via atime).
   Control API at `http://victim:8081` (`POST /swap|/contain|/restore`, `GET /status`, header `X-Guard-Token`).
 - Share content: Thomas's `python -m prepare.run_all` output in `./generated` (manifest.json, share/, stage/).
@@ -55,6 +57,10 @@ shows `CONTAINED`, and `cat share/clinical/patients.csv` now returns the fake.
 ## Known limitations
 
 <!-- TODO -->
-- Guard: the command log is written by the session user (mode 622), so an intruder could append fake
-  lines or truncate it. Mine detection by atime does not depend on the log.
+- Guard: only the guard writes the command log, and it decides the user, session and source IP
+  itself, so an intruder can't forge another user's or session's lines, or truncate the log. It can
+  still send made-up command text for its *own* session (it's logged as that session), and a
+  process that double-forks out of its SSH session is logged with its real user but no session.
+- Guard: if the guard container is down, sessions keep working but their commands are not logged
+  (mine detection by atime resumes when it is back).
 - Guard: sftp sessions are logged as one `sftp-server` command; their file reads are only caught by atime.

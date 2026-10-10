@@ -1,6 +1,7 @@
 """Guard logic: matching, log tailing, swap/restore round trips on a temp dir."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -47,29 +48,11 @@ def test_mines_hit_by_command():
     assert [x.id for x in hits] == ["m2"]
 
 
-def test_parse_record_and_command_event():
-    rec = g.parse_record(json.dumps({"ts": 1.5, "session": "s-1", "user": "svc_backup",
-                                     "src_ip": "172.18.0.5", "cmd": "id"}))
+def test_command_event():
+    rec = g.build_record({"cmd": "id"}, 1001, "s-1", "172.18.0.5", 1.5)
     ev = g.command_event(rec)
     assert ev.type == "command" and ev.user == "svc_backup" and ev.ts == 1.5
     assert ev.details == {"cmd": "id", "src_ip": "172.18.0.5", "session": "s-1"}
-    assert g.parse_record("not json") is None
-    assert g.parse_record("[1,2]") is None
-
-
-def test_log_tailer_reads_only_complete_new_lines(tmp_path):
-    log = tmp_path / "c.jsonl"
-    log.write_text('{"cmd": "old"}\n')
-    t = g.LogTailer(str(log))
-    assert t.read_new() == []
-    with log.open("a") as f:
-        f.write('{"cmd": "a"}\n{"cmd": "b')
-    assert [r["cmd"] for r in t.read_new()] == ["a"]
-    with log.open("a") as f:
-        f.write('"}\n')
-    assert [r["cmd"] for r in t.read_new()] == ["b"]
-    log.write_text('{"cmd": "x"}\n')  # truncated + rewritten
-    assert [r["cmd"] for r in t.read_new()] == ["x"]
 
 
 def test_swap_then_restore_round_trip_three_times(env):
@@ -106,8 +89,6 @@ def test_restore_recovers_from_vault_when_vault_tmp_is_lost(env):
 
 def test_watcher_mine_command_swaps_and_reports_in_order(env):
     p, m = env
-    Path(p.command_log).parent.mkdir(parents=True, exist_ok=True)
-    Path(p.command_log).write_text("")
     rep = FakeReporter()
     w = g.Watcher(p, rep, use_atime=False)
     lines = [
@@ -117,8 +98,8 @@ def test_watcher_mine_command_swaps_and_reports_in_order(env):
         {"ts": 12.0, "session": "s-a", "user": "svc_backup", "src_ip": "10.0.0.9",
          "cmd": f"cat {m.crown_jewels[0].real_path}"},
     ]
-    Path(p.command_log).write_text("".join(json.dumps(x) + "\n" for x in lines))
-    w.tick()
+    for rec in lines:
+        w.ingest(rec)
     types = [e.type for e in rep.events]
     assert types == ["command", "command", "mine_opened", "swap_done", "command", "file_opened"]
     assert rep.events[2].ref == "m1" and rep.events[2].user == "svc_backup"
@@ -151,3 +132,92 @@ def test_contain_blocks_user(env, monkeypatch):
     assert rep.events[-1].type == "contain_done" and rep.events[-1].details == {"user": "svc_backup", "by": "test"}
     g.do_restore(p, rep)
     assert Path(p.blocked_file).read_text() == ""
+
+
+# --- who sent a command: identity comes from the socket + process tree, not the client ----
+
+def _stat(pid, comm, ppid, start):
+    # fields: pid (comm) state ppid pgrp session tty tpgid flags minflt cminflt majflt cmajflt
+    #         utime stime cutime cstime priority nice threads itrealvalue starttime ...
+    return f"{pid} ({comm}) S {ppid} 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 {start} 0 0"
+
+
+def _status(uid):
+    return f"Name:\tx\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n"
+
+
+def test_parse_proc_handles_parens_in_comm():
+    assert g.parse_proc(_stat(42, "we(ird) name", 7, 999), _status(1001)) == (7, 1001, "we(ird) name", 999)
+    assert g.parse_proc("garbage", _status(0)) is None
+
+
+# victim process tree: 1 sshd listener -> 50 sshd [priv] (root) -> 51 sshd user@notty
+# -> 52 bash (mirage-shell) -> 53 python3 cmdlog.py
+TREE = {1: (0, 0, "sshd", 10), 50: (1, 0, "sshd", 5000), 51: (50, 1001, "sshd", 5001),
+        52: (51, 1001, "bash", 5002), 53: (52, 1001, "python3", 5003),
+        # attacker double-forked to escape its session and renamed itself "sshd"
+        90: (1, 1001, "sshd", 7000), 91: (90, 1001, "python3", 7001)}
+
+
+def test_find_connection_reaches_root_sshd_child_of_listener():
+    assert g.find_connection(53, info=TREE.get) == (50, 5000)
+    assert g.find_connection(51, info=TREE.get) == (50, 5000)
+
+
+def test_find_connection_rejects_fake_sshd_owned_by_user():
+    assert g.find_connection(91, info=TREE.get) is None
+    assert g.find_connection(12345, info=TREE.get) is None  # unknown pid
+    assert g.session_id(None) == ""
+
+
+def test_session_id_is_stable_per_connection_and_differs_between_connections():
+    a = g.session_id((50, 5000))
+    assert a == g.session_id((50, 5000)) and a.startswith("s-") and len(a) == 10
+    assert a != g.session_id((50, 5001))  # same pid reused later = new session
+
+
+def test_remote_ips_by_inode_ipv4_and_ipv6():
+    tcp = ("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+           "   0: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 1111 1\n"
+           "   1: 030012AC:0016 010012AC:C350 01 00000000:00000000 00:00000000 00000000     0        0 2222 1\n"
+           "   2: 030012AC:1F91 050012AC:D000 01 00000000:00000000 00:00000000 00000000     0        0 3333 1\n")
+    assert g.remote_ips_by_inode(tcp) == {"1111": "0.0.0.0", "2222": "172.18.0.1"}
+    assert g.hex_ip("0000000000000000FFFF00000100007F") == "127.0.0.1"
+    assert g.hex_ip("00000000000000000000000001000000") == "::1"
+
+
+def test_build_record_ignores_identity_claimed_by_client():
+    msg = {"cmd": "cat /etc/passwd", "mode": "exec", "cwd": "/tmp",
+           "user": "jdupont", "session": "s-evil", "src_ip": "6.6.6.6", "ts": 1.0}
+    rec = g.build_record(msg, 1001, "s-real", "172.18.0.1", 100.0)
+    assert rec == {"ts": 100.0, "session": "s-real", "user": "svc_backup", "uid": 1001,
+                   "src_ip": "172.18.0.1", "cmd": "cat /etc/passwd", "mode": "exec", "cwd": "/tmp"}
+    assert g.build_record({"cmd": 5}, 0, "", "", 1.0)["user"] == "root"
+
+
+def test_command_socket_round_trip_writes_log_and_swaps_before_ack(env):
+    import socket
+    import threading
+
+    p, m = env
+    g.secure_log(p)
+    rep = FakeReporter()
+    w = g.Watcher(p, rep, use_atime=False)
+    srv = g.CommandServer(p, w)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        assert oct(Path(p.cmd_socket).stat().st_mode & 0o777) == "0o666"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.connect(p.cmd_socket)
+            s.sendall(json.dumps({"cmd": f"cat {m.mines[0].path}", "user": "jdupont"}).encode() + b"\n")
+            assert s.recv(16) == b"ok\n"
+        # the swap is done by the time the client gets its ack
+        assert g.state_name(g.load_state(p)) == "swapped"
+        recs = [json.loads(x) for x in Path(p.command_log).read_text().splitlines()]
+        assert len(recs) == 1 and recs[0]["uid"] == os.getuid() and recs[0]["user"] != "jdupont"
+        assert recs[0]["session"] == ""  # pytest is not inside an SSH session
+        assert oct(Path(p.command_log).stat().st_mode & 0o777) == "0o600"
+        assert [e.type for e in rep.events] == ["command", "mine_opened", "swap_done"]
+    finally:
+        srv.shutdown()
+        srv.server_close()

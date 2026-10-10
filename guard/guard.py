@@ -1,9 +1,9 @@
 """MIRAGE guard: swaps the crown jewels for their fakes as soon as a mine is opened.
 
 Runs in its own container that shares the victim's network and PID namespaces and the
-/srv and /var/log/mirage volumes (see docker-compose.yml). Stdlib only.
+/srv, /var/log/mirage and /run/mirage volumes (see docker-compose.yml). Stdlib only.
 
-    python guard.py                 daemon: tail the command log, watch mines, control API on :8081
+    python guard.py                 daemon: command socket, mine watch, control API on :8081
     python guard.py restore         real files back, users unblocked, state clean (= demo reset)
     python guard.py swap            swap now, as if a mine had been opened
     python guard.py contain [USER]  block USER (default: last intruder) and kill their sessions
@@ -18,8 +18,12 @@ How a swap works (contracts: SHARE_DIR, STAGE_DIR, VAULT_TMP_DIR, VAULT_DIR), pe
 then the real files are copied to VAULT_DIR (a volume the victim does not mount).
 Restore does the reverse. Every step is idempotent, so restore can always be re-run.
 
+Command log: the victim's mirage-shell sends each command to the guard's unix socket
+/run/mirage/cmd.sock. The guard identifies the sender itself (SO_PEERCRED + process tree, see
+`find_connection`) and is the only writer of COMMAND_LOG (root, 600): users can't forge or truncate it.
+
 Two mine detectors, both behind `mines_hit_by_command` / `mines_read`:
-  1. a command in the log names the mine (gives user, session and source IP);
+  1. a command names the mine (gives user, session and source IP);
   2. the mine's atime moves (catches `grep -r`, globs, sftp...). Mines are "armed" with
      atime < mtime, so with relatime the first read updates atime.
 """
@@ -27,6 +31,7 @@ Two mine detectors, both behind `mines_hit_by_command` / `mines_read`:
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import hmac
 import json
 import os
@@ -34,6 +39,9 @@ import queue
 import re
 import shutil
 import signal
+import socket
+import socketserver
+import struct
 import sys
 import threading
 import time
@@ -88,13 +96,15 @@ class Paths:
     command_log: str = COMMAND_LOG
     guard_dir: str = "/srv/.guard"  # world-readable: victim reads blocked_users from here
     seed: str = "/seed"  # ./generated on the host (prepare.run_all output), read-only
+    cmd_socket: str = "/run/mirage/cmd.sock"  # victim's mirage-shell reports commands here
 
     @classmethod
     def under(cls, root: str | Path) -> Paths:
         """Same layout under a temp dir, for tests. Matches fakes.sample_manifest(root)."""
         r = str(root)
         return cls(f"{r}/share", f"{r}/.stage", f"{r}/.vault_tmp", f"{r}/vault",
-                   f"{r}/etc/manifest.json", f"{r}/log/commands.jsonl", f"{r}/.guard", f"{r}/seed")
+                   f"{r}/etc/manifest.json", f"{r}/log/commands.jsonl", f"{r}/.guard", f"{r}/seed",
+                   f"{r}/run/cmd.sock")
 
     @property
     def state_file(self) -> str:
@@ -183,20 +193,6 @@ def mentions(cmd: str, path: str) -> bool:
     return bool(name) and re.search(_BEFORE + re.escape(name) + _AFTER, cmd) is not None
 
 
-def parse_record(line: str) -> dict[str, Any] | None:
-    """One line of commands.jsonl -> dict with ts, session, user, src_ip, cmd. None if broken."""
-    try:
-        rec = json.loads(line)
-    except ValueError:
-        return None
-    if not isinstance(rec, dict) or "cmd" not in rec:
-        return None
-    rec.setdefault("ts", time.time())
-    for k in ("session", "user", "src_ip", "mode", "cwd"):
-        rec.setdefault(k, "")
-    return rec
-
-
 def mines_hit_by_command(cmd: str, m: Manifest) -> list[Mine]:
     return [mine for mine in m.mines if mentions(cmd, mine.path)]
 
@@ -224,37 +220,169 @@ def file_event(cj: CrownJewel, rec: dict[str, Any], swapped: list[str]) -> Event
                           "src_ip": rec["src_ip"]})
 
 
-class LogTailer:
-    """Reads new complete lines from the command log. Starts at the end (no replay)."""
+# --------------------------------------------------------------------------
+# Who sent a command record: worked out by the guard, never trusted from the client
+# --------------------------------------------------------------------------
+# mirage-shell's client connects to CMD_SOCKET and sends only {cmd, mode, cwd}. The guard
+# takes the uid and pid from the socket itself (SO_PEERCRED), then walks the victim's process
+# tree (shared PID namespace) up to the per-connection sshd process: root-owned, child of the
+# sshd listener (pid 1). Its pid + start time = the session; its TCP socket = the source IP.
+# A user cannot fake a root ancestor, so they cannot log as another user or session.
 
-    def __init__(self, path: str, from_start: bool = False):
-        self.path = path
-        self.buf = b""
-        try:
-            self.pos = 0 if from_start else os.path.getsize(path)
-        except OSError:
-            self.pos = 0
+ProcInfo = tuple[int, int, str, int]  # ppid, real uid, comm, start time (clock ticks)
+SSHD_COMMS = ("sshd", "sshd-session")
 
-    def read_new(self) -> list[dict[str, Any]]:
+
+def read_proc(pid: int) -> ProcInfo | None:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        status = Path(f"/proc/{pid}/status").read_text()
+    except OSError:
+        return None
+    return parse_proc(stat, status)
+
+
+def parse_proc(stat: str, status: str) -> ProcInfo | None:
+    """/proc/<pid>/stat + status text -> (ppid, uid, comm, starttime). comm may contain ')'."""
+    try:
+        comm = stat[stat.index("(") + 1:stat.rindex(")")]
+        rest = stat[stat.rindex(")") + 2:].split()  # rest[0] = field 3 (state)
+        uid_line = next(x for x in status.splitlines() if x.startswith("Uid:"))
+        return int(rest[1]), int(uid_line.split()[1]), comm, int(rest[19])
+    except (ValueError, IndexError, StopIteration):
+        return None
+
+
+def find_connection(pid: int, info=read_proc, listener: int = 1, max_depth: int = 64) -> tuple[int, int] | None:
+    """Walk up from `pid` to the per-connection sshd (root, comm sshd, parent = listener).
+    Returns (pid, starttime), or None if the process is not inside an SSH session."""
+    cur = pid
+    for _ in range(max_depth):
+        i = info(cur)
+        if i is None:
+            return None
+        ppid, uid, comm, start = i
+        if ppid == listener and uid == 0 and comm in SSHD_COMMS:
+            return cur, start
+        if ppid <= 1:
+            return None  # reached the listener / init without a session process
+        cur = ppid
+    return None
+
+
+def session_id(conn: tuple[int, int] | None) -> str:
+    if conn is None:
+        return ""
+    return "s-" + hashlib.sha1(f"{conn[0]}:{conn[1]}".encode()).hexdigest()[:8]
+
+
+def hex_ip(h: str) -> str:
+    """Address from /proc/net/tcp{,6} (host-order 32-bit words) -> text. ::ffff:a.b.c.d -> a.b.c.d."""
+    raw = b"".join(bytes.fromhex(h[i:i + 8])[::-1] for i in range(0, len(h), 8))
+    if len(raw) == 4:
+        return socket.inet_ntop(socket.AF_INET, raw)
+    if raw[:12] == b"\0" * 10 + b"\xff\xff":
+        return socket.inet_ntop(socket.AF_INET, raw[12:])
+    return socket.inet_ntop(socket.AF_INET6, raw)
+
+
+def remote_ips_by_inode(tcp_text: str, local_port: int = 22) -> dict[str, str]:
+    """/proc/net/tcp text -> {socket inode: remote ip} for connections to `local_port`."""
+    out = {}
+    for line in tcp_text.splitlines()[1:]:
+        f = line.split()
+        if len(f) < 10:
+            continue
+        local, remote, inode = f[1], f[2], f[9]
+        if int(local.rsplit(":", 1)[1], 16) == local_port and inode != "0":
+            out[inode] = hex_ip(remote.rsplit(":", 1)[0])
+    return out
+
+
+def src_ip_of(pid: int) -> str:
+    """Remote IP of the SSH TCP socket held by `pid` (we share the victim's network namespace)."""
+    inodes = {}
+    for name in ("/proc/net/tcp", "/proc/net/tcp6"):
         try:
-            size = os.path.getsize(self.path)
+            inodes.update(remote_ips_by_inode(Path(name).read_text()))
         except OSError:
-            return []
-        if size < self.pos:  # truncated
-            self.pos, self.buf = 0, b""
-        if size == self.pos:
-            return []
-        with open(self.path, "rb") as f:
-            f.seek(self.pos)
-            data = f.read()
-        self.pos += len(data)
-        *lines, self.buf = (self.buf + data).split(b"\n")
-        out = []
-        for raw in lines:
-            rec = parse_record(raw.decode("utf-8", "replace"))
-            if rec:
-                out.append(rec)
-        return out
+            pass
+    try:
+        for fd in os.listdir(f"/proc/{pid}/fd"):
+            link = os.readlink(f"/proc/{pid}/fd/{fd}")
+            if link.startswith("socket:[") and link[8:-1] in inodes:
+                return inodes[link[8:-1]]
+    except OSError:
+        pass
+    return ""
+
+
+def user_name(uid: int) -> str:
+    return next((u for u, i in VICTIM_UIDS.items() if i == uid), "root" if uid == 0 else str(uid))
+
+
+def build_record(msg: dict[str, Any], uid: int, session: str, src_ip: str, ts: float) -> dict[str, Any]:
+    """Command record for the log. Only cmd/mode/cwd come from the client; the rest is ours."""
+    def text(k: str, limit: int) -> str:
+        v = msg.get(k, "")
+        return (v if isinstance(v, str) else str(v))[:limit]
+
+    return {"ts": ts, "session": session, "user": user_name(uid), "uid": uid, "src_ip": src_ip,
+            "cmd": text("cmd", 16384), "mode": text("mode", 32), "cwd": text("cwd", 1024)}
+
+
+class CommandServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    """Unix socket the victim's mirage-shell reports commands to. Only the guard writes the log."""
+
+    daemon_threads = True
+
+    def __init__(self, p: Paths, watcher: Watcher):
+        self.p, self.watcher = p, watcher
+        self.log_lock = threading.Lock()
+        self.sessions: dict[tuple[int, int], str] = {}  # connection -> src ip (cache)
+        os.makedirs(os.path.dirname(p.cmd_socket), exist_ok=True)
+        os.chmod(os.path.dirname(p.cmd_socket), 0o755)  # users can't delete or replace the socket
+        try:
+            os.unlink(p.cmd_socket)
+        except FileNotFoundError:
+            pass
+        super().__init__(p.cmd_socket, CommandHandler)
+        os.chmod(p.cmd_socket, 0o666)  # every victim user may connect
+
+    def identify(self, pid: int) -> tuple[str, str]:
+        conn = find_connection(pid)
+        if conn is None:
+            return "", ""
+        if conn not in self.sessions:
+            self.sessions[conn] = src_ip_of(conn[0])
+        return session_id(conn), self.sessions[conn]
+
+    def record(self, rec: dict[str, Any]) -> None:
+        with self.log_lock:
+            with open(self.p.command_log, "a") as f:
+                f.write(json.dumps(rec) + "\n")
+        self.watcher.ingest(rec)
+
+
+class CommandHandler(socketserver.StreamRequestHandler):
+    def handle(self) -> None:
+        srv: CommandServer = self.server  # type: ignore[assignment]
+        try:
+            creds = self.request.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+            pid, uid, _gid = struct.unpack("3i", creds)
+            line = self.rfile.readline(65536)
+            msg = json.loads(line or b"{}")
+            if not isinstance(msg, dict):
+                raise ValueError("not an object")
+            session, src_ip = srv.identify(pid)
+            srv.record(build_record(msg, uid, session, src_ip, time.time()))
+            self.wfile.write(b"ok\n")  # after the swap, if this command opened a mine
+        except Exception as e:  # noqa: BLE001 - a bad client must not hurt the guard
+            log(f"cmd socket: rejected a record ({e!r})")
+            try:
+                self.wfile.write(b"error\n")
+            except OSError:
+                pass
 
 
 # --------------------------------------------------------------------------
@@ -638,24 +766,29 @@ def fix_perms(p: Paths) -> None:
 
 
 class Watcher:
-    """One tick = handle new log lines, then check mine atimes."""
+    """Command records come in through `ingest` (socket threads); `tick` checks mine atimes."""
 
-    def __init__(self, p: Paths, rep: Reporter, use_atime: bool = True, from_start: bool = False):
+    def __init__(self, p: Paths, rep: Reporter, use_atime: bool = True):
         self.p, self.rep, self.use_atime = p, rep, use_atime
-        self.tailer = LogTailer(p.command_log, from_start=from_start)
+        self.lock = threading.Lock()
         self.last_rec: dict[str, Any] | None = None
         self.recent: dict[str, float] = {}  # mine id -> time of last command hit
 
+    def ingest(self, rec: dict[str, Any]) -> None:
+        with self.lock:
+            self.handle(rec, load_manifest(self.p))
+
     def tick(self) -> None:
-        m = load_manifest(self.p)
-        for rec in self.tailer.read_new():
-            self.handle(rec, m)
-        if self.use_atime:
+        if not self.use_atime:
+            return
+        with self.lock:
+            m = load_manifest(self.p)
             for mine in mines_read(m):
                 arm_mine(mine.path)
                 if time.time() - self.recent.get(mine.id, 0) < MINE_DEDUP_S:
                     continue
-                rec = self.last_rec if self.last_rec and time.time() - float(self.last_rec["ts"]) < 10 else None
+                last = self.last_rec
+                rec = last if last and time.time() - float(last["ts"]) < 10 else None
                 self.mine_opened(mine, rec, via="atime")
 
     def handle(self, rec: dict[str, Any], m: Manifest) -> None:
@@ -742,8 +875,18 @@ def make_handler(p: Paths, rep: Reporter):
     return Handler
 
 
+def secure_log(p: Paths) -> None:
+    """Command log: root-only (dir 700, file 600). Only the guard writes it."""
+    d = os.path.dirname(p.command_log)
+    os.makedirs(d, exist_ok=True)
+    os.chmod(d, 0o700)
+    fd = os.open(p.command_log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    os.close(fd)
+    os.chmod(p.command_log, 0o600)
+
+
 def prepare(p: Paths, force_seed: bool = False) -> None:
-    os.makedirs(os.path.dirname(p.command_log), exist_ok=True)
+    secure_log(p)
     source = seed(p, force=force_seed)
     fix_perms(p)
     if not os.path.exists(p.blocked_file):
@@ -763,7 +906,9 @@ def run_daemon(p: Paths) -> None:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     log(f"control API on :{CONTROL_PORT} (token {'required' if GUARD_TOKEN else 'NOT set'})")
     w = Watcher(p, rep, use_atime=use_atime)
-    log(f"watching {p.command_log}, state={state_name(load_state(p))}")
+    cmd_server = CommandServer(p, w)
+    threading.Thread(target=cmd_server.serve_forever, daemon=True).start()
+    log(f"command socket {p.cmd_socket} -> {p.command_log}, state={state_name(load_state(p))}")
     while True:
         try:
             w.tick()

@@ -12,12 +12,12 @@ for u in svc_backup jdupont; do
   fi
 done
 
-# Command log: users may append (mirage-shell runs as them) but not read it.
-mkdir -p /var/log/mirage
-chmod 711 /var/log/mirage
-touch /var/log/mirage/commands.jsonl
-chown root:root /var/log/mirage/commands.jsonl
-chmod 622 /var/log/mirage/commands.jsonl
+# Command log: written only by the guard (via /run/mirage/cmd.sock). Root-only here too.
+mkdir -p /var/log/mirage /run/mirage
+chown root:root /var/log/mirage /run/mirage
+chmod 700 /var/log/mirage
+chmod 755 /run/mirage
+[ -f /var/log/mirage/commands.jsonl ] && chmod 600 /var/log/mirage/commands.jsonl
 
 # The guard container owns /srv; just make sure the share path exists.
 mkdir -p /srv/share

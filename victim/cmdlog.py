@@ -1,45 +1,39 @@
-"""Append one command record to the MIRAGE command log (JSON lines). Called by mirage-shell.
+"""Report one command to the MIRAGE guard. Called by mirage-shell before the command runs.
 
     python3 cmdlog.py <cmd> [mode]      mode: exec | interactive | login | blocked
 
-The log file is created by the entrypoint with mode 622: users can append, not read.
+Sends {cmd, mode, cwd} to the guard's unix socket. The guard works out who we are (user,
+session, source IP) from the socket and the process tree, and is the only writer of the
+command log: this process can't write the log, and anything else it claims is ignored.
+Fails soft: if the guard is down, the session still runs.
 """
 
 import json
 import os
+import socket
 import sys
-import time
 
-LOG = "/var/log/mirage/commands.jsonl"  # contracts.COMMAND_LOG
-
-
-def record(cmd: str, mode: str) -> dict:
-    conn = os.environ.get("SSH_CONNECTION", "").split()
-    try:
-        cwd = os.getcwd()
-    except OSError:
-        cwd = ""
-    return {
-        "ts": time.time(),
-        "session": os.environ.get("MIRAGE_SID", ""),
-        "user": os.environ.get("USER", ""),
-        "src_ip": conn[0] if conn else "",
-        "cmd": cmd,
-        "mode": mode,
-        "cwd": cwd,
-    }
+SOCK = "/run/mirage/cmd.sock"
+TIMEOUT_S = 2.0  # the guard answers after a possible swap (well under 1 s)
 
 
 def main() -> None:
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     mode = sys.argv[2] if len(sys.argv) > 2 else "exec"
-    line = (json.dumps(record(cmd, mode)) + "\n").encode()
-    fd = os.open(LOG, os.O_WRONLY | os.O_APPEND)  # one write = one atomic line
     try:
-        os.write(fd, line)
-    finally:
-        os.close(fd)
+        cwd = os.getcwd()
+    except OSError:
+        cwd = ""
+    msg = json.dumps({"cmd": cmd[:16384], "mode": mode, "cwd": cwd}) + "\n"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(TIMEOUT_S)
+        s.connect(SOCK)
+        s.sendall(msg.encode())
+        s.recv(16)  # wait for the guard's ack
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (OSError, ValueError):
+        sys.exit(0)  # never break the session
