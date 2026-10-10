@@ -1,6 +1,6 @@
 """believability: build the "real or fake?" quiz for the Believability metric (target: about 50%).
 
-    python -m prepare.believability --share generated/share-original --stage generated/stage
+    python -m mirage.prepare.believability --share generated/share-original --stage generated/stage
 
 Takes N matching rows (real row vs fake row of the first CSV crown jewel), shuffles each pair, and
 writes generated/believability.md for the people from other teams plus believability_key.json for us.

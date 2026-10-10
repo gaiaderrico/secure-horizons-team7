@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 
-from prepare import llm
+from mirage.prepare import llm
 
 try:
     from mirage.contracts import Claim

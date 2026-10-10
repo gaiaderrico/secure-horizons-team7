@@ -1,7 +1,7 @@
 import json
 import random
 
-from prepare import believability, dev_seed, forge
+from mirage.prepare import believability, dev_seed, forge
 
 
 def test_quiz_has_five_pairs_and_a_key(tmp_path):

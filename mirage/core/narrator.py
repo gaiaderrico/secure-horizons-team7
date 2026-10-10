@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 
-from prepare import llm
+from mirage.prepare import llm
 
 LABEL_TEXT = {
     "ai_agent": "AI agent",

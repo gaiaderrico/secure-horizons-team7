@@ -1,6 +1,6 @@
 import pytest
 
-from core import claims, narrator
+from mirage.core import claims, narrator
 
 contracts = pytest.importorskip("mirage.contracts")
 

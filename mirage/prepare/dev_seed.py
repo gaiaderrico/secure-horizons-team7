@@ -2,7 +2,7 @@
 
 The real one is prepare/seed_company.py (P2). This produces the same layout the plan shows
 (clinical/patients.csv, it/.env, a memo) plus ordinary files, all invented.
-Run:  python -m prepare.dev_seed generated/share
+Run:  python -m mirage.prepare.dev_seed generated/share
 """
 from __future__ import annotations
 

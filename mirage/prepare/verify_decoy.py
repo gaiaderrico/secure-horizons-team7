@@ -11,7 +11,7 @@ Checks
   no_real_values  no identifying value of the real file appears in the twin
   beacons         every beacon announced for this twin really is inside it
 
-CLI:  python -m prepare.verify_decoy REAL FAKE [--beacon VALUE ...]
+CLI:  python -m mirage.prepare.verify_decoy REAL FAKE [--beacon VALUE ...]
 """
 from __future__ import annotations
 

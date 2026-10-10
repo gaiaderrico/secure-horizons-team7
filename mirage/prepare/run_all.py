@@ -1,7 +1,7 @@
 """run_all: seed -> classify -> forge -> verify -> mines -> manifest.json, with no human help.
 
-    python -m prepare.run_all                       # uses generated/share, creates it if missing
-    python -m prepare.run_all --share path/to/share --llm
+    python -m mirage.prepare.run_all                       # uses generated/share, creates it if missing
+    python -m mirage.prepare.run_all --share path/to/share --llm
 
 Inputs   a share directory (from seed_company.py, or the stand-in prepare/dev_seed.py)
 Outputs  generated/manifest.json            the contract read by guard, core and dashboard

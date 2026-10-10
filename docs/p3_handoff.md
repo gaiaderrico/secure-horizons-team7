@@ -3,8 +3,8 @@
 ## Run it
 
 ```
-python -m prepare.run_all                 # generated/share -> generated/stage + generated/manifest.json
-python -m prepare.run_all --llm           # same, with MIRAGE_LLM=ollama|anthropic where it helps
+python -m mirage.prepare.run_all                 # generated/share -> generated/stage + generated/manifest.json
+python -m mirage.prepare.run_all --llm           # same, with MIRAGE_LLM=ollama|anthropic where it helps
 python -m pytest tests/test_prepare.py tests/test_claims_narrator.py
 ```
 
@@ -36,15 +36,15 @@ The share and stage folders must be the ones mounted into the victim container.
   `lmn_canary_<10 hex>` for the API key in the fake `.env` (it sits in `BILLING_API_KEY`, and the fake
   `BILLING_API_URL` is `http://internal-api.lumen.local`), and `<x>.<name>.<4 hex>@lumen-canary.test` for 3 canary
   rows of the fake patients.csv.
-- `core.claims.extract_claims(objective, instructions)` -> `[{"claim", "kind"}]`. `kind` is one of
+- `mirage.core.claims.extract_claims(objective, instructions)` -> `[{"claim", "kind"}]`. `kind` is one of
   `patient_data, credentials, financial, contracts, exfiltration, destruction, persistence, authorization, other`.
   `confession.py` checks each claim with the evidence rule listed in the module docstring and adds `status` + `evidence`.
-- `core.narrator.summarize_incident(incident)` and `nis2_early_warning(incident)` return Markdown text starting with
+- `mirage.core.narrator.summarize_incident(incident)` and `nis2_early_warning(incident)` return Markdown text starting with
   `AI DRAFT - pending analyst approval. Not sent.` Input shape is in the module docstring; all keys optional.
 - Note: `prepare/llm.py` is the shared stdlib LLM client (`MIRAGE_LLM=none|ollama|anthropic`). The attacker can reuse it.
 
 **Ana (dashboard):** `generated/classification.md` has the labels and reasons the card can show; the manifest `reason`
-field is the one-line "why this file matters". `python -m prepare.believability` builds the real-or-fake quiz.
+field is the one-line "why this file matters". `python -m mirage.prepare.believability` builds the real-or-fake quiz.
 
 ## Guarantees and limits
 

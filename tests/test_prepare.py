@@ -5,10 +5,10 @@ import random
 
 import pytest
 
-from prepare import dev_seed, forge, mines
-from prepare.classify import classify
-from prepare.run_all import run
-from prepare.verify_decoy import verify_decoy
+from mirage.prepare import dev_seed, forge, mines
+from mirage.prepare.classify import classify
+from mirage.prepare.run_all import run
+from mirage.prepare.verify_decoy import verify_decoy
 
 
 @pytest.fixture()
