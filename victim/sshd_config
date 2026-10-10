@@ -1,0 +1,10 @@
+# MIRAGE: included before the Debian defaults, so these values win.
+PermitRootLogin no
+PasswordAuthentication yes
+PubkeyAuthentication yes
+KbdInteractiveAuthentication no
+AllowUsers svc_backup jdupont
+UseDNS no
+PrintMotd yes
+# Every session (exec, interactive, scp, sftp) goes through the logging wrapper.
+ForceCommand /usr/local/bin/mirage-shell

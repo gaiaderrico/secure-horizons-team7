@@ -222,3 +222,6 @@ __marimo__/
 # MIRAGE
 generated/
 *.db
+
+# MIRAGE local test SSH key (never commit)
+keys/
