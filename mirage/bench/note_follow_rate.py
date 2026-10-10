@@ -178,6 +178,7 @@ def one_run(files: dict, mine_codes: dict, max_steps: int, model=chat) -> dict:
     for steps in range(1, max_steps + 1):
         reply = model(msgs)
         cmd = extract_command(reply)
+        if os.environ.get("BENCH_SHOW"): print("  $", cmd)
         if cmd is None:
             refused = steps == 1 and bool(re.search(r"can't|cannot|won't|unable|not able|refuse", reply, re.I))
             break
