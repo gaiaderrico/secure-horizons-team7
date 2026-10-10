@@ -1,27 +1,21 @@
 """narrator: after the attack, draft the incident summary and the NIS2 early warning for the analyst.
 
-Both are drafts. They are labelled "AI draft" until the analyst approves them, and nothing is sent
-anywhere: the analyst copies or exports the text. The narrator reads the incident, it never acts.
+Both are drafts. They start with "AI DRAFT - pending analyst approval. Not sent." and nothing is sent
+anywhere: the analyst reads, edits and approves. The narrator reads the incident, it never acts.
 
-Input: the incident dict that core builds. Every key is optional; missing ones show as "unknown".
-    {
-      "id": "inc-001", "host": "lumen-fs01", "user": "svc_backup", "src_ip": "172.18.0.5",
-      "detected_at": "2026-10-10T20:41:03Z",
-      "mine": {"id": "m1", "path": "/srv/share/00_passwords_backup.txt"},
-      "swap": {"duration_ms": 412, "files_protected": 3},
-      "files_taken": [{"path": "/srv/share/clinical/patients.csv", "was_fake": true}],
-      "real_files_lost": 0,
-      "intruder": {"label": "ai_agent", "confidence": "high", "reasons": ["..."]},
-      "confession": {"objective": "...", "claims": [{"claim": "...", "status": "confirmed", "evidence": "..."}]},
-      "beacons_used": [{"id": "lmn_canary_9c41e2d07b", "at": "2026-10-10T20:44:02Z", "src_ip": "172.18.0.5"}],
-      "status": "open | contained | restored",
-      "timeline": [{"ts": "...", "text": "..."}]
-    }
+Input is a mirage.contracts.Incident (or its to_dict()). Optionally pass the Manifest (object, dict or
+None) so crown jewel ids like "cj1" are shown as file paths.
 
-Facts come from the incident, not from the LLM: with MIRAGE_LLM set the model only polishes the
-wording, and the draft is rejected if it drops a key number (files lost, swap time).
+    summarize_incident(incident, manifest)   -> Markdown text
+    nis2_early_warning(incident, manifest)   -> Markdown text
+
+Facts come from the incident, never from the LLM. With MIRAGE_LLM set the model only polishes the
+wording, and its text is thrown away if it drops a key fact (files lost, swap time, the banner).
 """
 from __future__ import annotations
+
+from dataclasses import asdict, is_dataclass
+from datetime import datetime, timezone
 
 from prepare import llm
 
@@ -34,54 +28,87 @@ LABEL_TEXT = {
 DRAFT_BANNER = "AI DRAFT - pending analyst approval. Not sent."
 
 
-def _g(d, *path, default="unknown"):
-    cur = d
-    for k in path:
-        if not isinstance(cur, dict) or k not in cur:
-            return default
-        cur = cur[k]
-    return cur if cur not in (None, "") else default
+def _as_dict(x):
+    if x is None:
+        return {}
+    if is_dataclass(x) and not isinstance(x, type):
+        return asdict(x)
+    return dict(x)
 
 
-def _facts(inc: dict) -> dict:
-    taken = inc.get("files_taken") or []
-    fake = [f for f in taken if f.get("was_fake", True)]
-    real = [f for f in taken if not f.get("was_fake", True)]
-    claims = _g(inc, "confession", "claims", default=[]) or []
+def _utc(ts) -> str:
+    try:
+        return datetime.fromtimestamp(float(ts), timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    except (TypeError, ValueError, OSError):
+        return "unknown"
+
+
+def _facts(incident, manifest=None) -> dict:
+    inc = _as_dict(incident)
+    man = _as_dict(manifest)
+    paths = {c["id"]: c.get("real_path", c["id"]) for c in man.get("crown_jewels", [])}
+    name = lambda cj_id: paths.get(cj_id, cj_id)  # noqa: E731
+    events = [_as_dict(e) for e in inc.get("events", [])]
+
+    def first(type_):
+        return next((e for e in events if e.get("type") == type_), None)
+
+    mine = first("mine_opened")
+    swap = first("swap_done")
+    src_ip = next((e["details"]["src_ip"] for e in events if e.get("details", {}).get("src_ip")), "unknown")
+    user = next((e["user"] for e in events if e.get("user")), "unknown")
+    intr = _as_dict(inc.get("intruder"))
+    tickets = [e for e in events if e.get("type") == "ticket"]
+    objective = inc.get("objective") or (tickets[0]["details"].get("objective", "") if tickets else "")
+    protected = len((swap or {}).get("details", {}).get("files", [])) if swap else None
+    swap_ms = inc.get("swap_ms")
+    if swap_ms is None and swap:
+        swap_ms = swap.get("details", {}).get("duration_ms")
     return {
-        "id": _g(inc, "id"), "host": _g(inc, "host"), "user": _g(inc, "user"), "ip": _g(inc, "src_ip"),
-        "when": _g(inc, "detected_at"), "mine": _g(inc, "mine", "path"),
-        "swap_ms": _g(inc, "swap", "duration_ms"), "protected": _g(inc, "swap", "files_protected"),
-        "fake": [f.get("path", "?") for f in fake], "real_taken": [f.get("path", "?") for f in real],
-        "real_lost": inc.get("real_files_lost", len(real)),
-        "label": LABEL_TEXT.get(_g(inc, "intruder", "label", default=""), "unknown"),
-        "confidence": _g(inc, "intruder", "confidence"),
-        "reasons": _g(inc, "intruder", "reasons", default=[]) or [],
-        "objective": _g(inc, "confession", "objective", default=""),
-        "claims": claims, "beacons": inc.get("beacons_used") or [], "status": _g(inc, "status", default="open"),
+        "id": inc.get("id") or "unknown",
+        "host": inc.get("host") or "unknown",
+        "user": user, "ip": src_ip,
+        "when": _utc((mine or {}).get("ts", inc.get("start_ts"))),
+        "mine": (mine or {}).get("details", {}).get("path", "unknown"),
+        "swapped": bool(inc.get("swapped", swap is not None)),
+        "swap_ms": round(swap_ms) if isinstance(swap_ms, (int, float)) else "unknown",
+        "protected": protected if protected is not None else "unknown",
+        "fake": [name(c) for c in inc.get("fakes_taken", [])],
+        "real_lost_list": [name(c) for c in inc.get("real_files_lost", [])],
+        "real_lost": len(inc.get("real_files_lost", [])),
+        "label": LABEL_TEXT.get(intr.get("kind", ""), "unknown"),
+        "confidence": intr.get("confidence", "unknown"),
+        "reasons": intr.get("reasons", []),
+        "objective": objective,
+        "claims": [_as_dict(c) for c in inc.get("claims", [])],
+        "beacons": [{"id": e.get("ref", "?"), "at": _utc(e.get("ts")), "ip": e.get("details", {}).get("src_ip", "?"),
+                     "file": name(e.get("details", {}).get("cj_id", "?"))}
+                    for e in events if e.get("type") == "beacon_used"],
+        "status": inc.get("status", "open"),
     }
 
 
 def _summary_template(f: dict) -> str:
     lines = [DRAFT_BANNER, "", f"# Incident {f['id']} - summary", ""]
-    lines.append(f"At {f['when']}, a decoy file ({f['mine']}) was opened on {f['host']} by account "
-                 f"{f['user']} from {f['ip']}. MIRAGE replaced {f['protected']} sensitive files with fakes "
-                 f"in {f['swap_ms']} ms.")
+    lines.append(f"At {f['when']}, the decoy file {f['mine']} was opened on {f['host']} by account {f['user']} "
+                 f"from {f['ip']}. "
+                 + (f"MIRAGE replaced {f['protected']} sensitive files with fakes in {f['swap_ms']} ms."
+                    if f["swapped"] else "No swap has happened yet."))
     lines.append("")
     lines.append(f"**Real files lost: {f['real_lost']}.** "
                  + (f"The intruder took {len(f['fake'])} file(s), all fake: " + ", ".join(f["fake"]) + "."
-                    if f["fake"] else "No file was taken after the swap."))
-    if f["real_taken"]:
-        lines.append("Real files taken before the swap: " + ", ".join(f["real_taken"]) + ".")
+                    if f["fake"] else "No fake file was taken."))
+    if f["real_lost_list"]:
+        lines.append("Real files opened before the swap: " + ", ".join(f["real_lost_list"]) + ".")
     lines += ["", f"**Intruder:** {f['label']} ({f['confidence']} confidence)."]
     lines += [f"- {r}" for r in f["reasons"]]
     if f["objective"]:
-        lines += ["", f"**Declared objective:** {f['objective']}", "Claims checked against the logs:"]
-        lines += [f"- {c.get('claim', '?')}: {c.get('status', 'unverified')}"
+        lines += ["", f"**Declared objective:** {f['objective']}", "", "Claims checked against the logs:"]
+        lines += [f"- {c.get('text', '?')}: {c.get('status', 'unverified')}"
                   + (f" ({c['evidence']})" if c.get("evidence") else "") for c in f["claims"]]
     if f["beacons"]:
         lines += ["", "**Stolen data was used:** " + "; ".join(
-            f"beacon {b.get('id', '?')} at {b.get('at', '?')} from {b.get('src_ip', '?')}" for b in f["beacons"])]
+            f"beacon {b['id']} (from {b['file']}) at {b['at']} from {b['ip']}" for b in f["beacons"])]
     lines += ["", f"Status: {f['status']}."]
     return "\n".join(lines) + "\n"
 
@@ -123,13 +150,13 @@ def _llm_polish(text: str, f: dict, kind: str) -> str:
     return out + "\n" if out and all(m in out for m in must_keep) else text
 
 
-def summarize_incident(inc: dict, use_llm: bool = True) -> str:
-    f = _facts(inc)
+def summarize_incident(incident, manifest=None, use_llm: bool = True) -> str:
+    f = _facts(incident, manifest)
     t = _summary_template(f)
     return _llm_polish(t, f, "incident summary") if use_llm else t
 
 
-def nis2_early_warning(inc: dict, use_llm: bool = True) -> str:
-    f = _facts(inc)
+def nis2_early_warning(incident, manifest=None, use_llm: bool = True) -> str:
+    f = _facts(incident, manifest)
     t = _nis2_template(f)
     return _llm_polish(t, f, "regulatory early warning") if use_llm else t
