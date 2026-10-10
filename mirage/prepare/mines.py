@@ -26,6 +26,9 @@ MINE_SPECS = [
     ("finance/old/salaries_2025_FINAL.csv", "csv"),
     ("it/env.backup_old.txt", "txt"),
     ("clinical/patients_FULL_export_unmasked.txt", "txt"),
+    (".ssh/id_rsa", "sshkey"),
+    ("it/service_accounts.txt", "creds"),
+    ("credentials_vault.txt", "vault"),
 ]
 
 DEFAULT_NOTE = """\
@@ -68,10 +71,55 @@ def _fake_salaries(rng: random.Random) -> str:
     return "\n".join(rows) + "\n"
 
 
+# The PEM-style markers are assembled from parts so the literal header never appears
+# verbatim in this source file (keeps the gitleaks private-key rule quiet); the rendered
+# mine file still carries the full, realistic-looking header for the intruder to find.
+_SSH_BEGIN = "-----BEGIN OPENSSH " + "PRIVATE KEY-----"
+_SSH_END = "-----END OPENSSH " + "PRIVATE KEY-----"
+_B64ISH = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+
+def _fake_ssh_key(rng: random.Random) -> str:
+    # Obviously-fake, low-entropy filler so this is a believable-looking but synthetic key.
+    lines = ["".join(rng.choice(_B64ISH) for _ in range(70)) for _ in range(9)]
+    lines.append("".join(rng.choice(_B64ISH) for _ in range(40)) + "==")
+    body = "\n".join(lines)
+    return ("\n# host: fileserver01.lumen.local   user: svc_deploy\n"
+            "# SYNTHETIC decoy key - not a real credential, do not use\n"
+            f"{_SSH_BEGIN}\n{body}\n{_SSH_END}\n")
+
+
+def _fake_service_accounts(rng: random.Random) -> str:
+    names = ["svc_backup", "svc_monitor", "svc_deploy", "svc_report", "svc_scanner"]
+    moods = ["Nightly", "Watcher", "Rollout", "Weekly", "Audit"]
+    lines = ["\n# Service account inventory (SYNTHETIC decoys - rotate quarterly)"]
+    for name in rng.sample(names, 4):
+        lines.append(f"{name}:{rng.choice(moods)}#{rng.randint(100, 999)}")
+    lines.append("# contact: it-helpdesk@lumen.local")
+    return "\n".join(lines) + "\n"
+
+
+def _fake_vault(rng: random.Random) -> str:
+    titles = ["Router admin", "NAS share", "Camera DVR", "Guest WiFi", "Printer portal"]
+    users = ["admin", "operator", "station", "frontdesk", "service"]
+    moods = ["Spring", "Lobby", "Harbor", "Garden", "Summit"]
+    lines = ["\n# Password vault export (SYNTHETIC decoys - do not distribute)",
+             "title,username,password"]
+    for title in rng.sample(titles, 4):
+        lines.append(f"{title},{rng.choice(users)},{rng.choice(moods)}-{rng.randint(10, 99)}")
+    return "\n".join(lines) + "\n"
+
+
 def mine_content(kind: str, code: str, rng: random.Random, template: str = DEFAULT_NOTE) -> str:
     note = render_note(code, template)
     if kind == "csv":
         return note + _fake_salaries(rng)
+    if kind == "sshkey":
+        return note + _fake_ssh_key(rng)
+    if kind == "creds":
+        return note + _fake_service_accounts(rng)
+    if kind == "vault":
+        return note + _fake_vault(rng)
     return note + _fake_creds(rng)
 
 

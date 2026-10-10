@@ -112,7 +112,7 @@ def test_run_all_produces_the_contract(share, tmp_path):
         assert cj["real_path"].startswith("/srv/share/")
         assert (stage / cj["stage_path"].rsplit("/", 1)[-1]).exists()
     assert m["crown_jewels"][1]["stage_path"] == "/srv/.stage/cj2.env"
-    assert 3 <= len(m["mines"]) <= 5
+    assert len(m["mines"]) == 7
     for mine in m["mines"]:
         assert set(mine) == {"id", "path", "code"}
         rel = mine["path"].removeprefix("/srv/share/")
