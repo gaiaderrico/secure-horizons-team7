@@ -145,3 +145,26 @@ def test_ticket_appears_in_an_incident(client):
     assert incidents
     tickets = [e for inc in incidents for e in inc["events"] if e["type"] == "ticket"]
     assert any(e["ref"] == "pineapple-7731" for e in tickets)
+
+
+def test_tickets_accepts_form_and_raw_and_query(tmp_path):
+    from fastapi.testclient import TestClient
+    from mirage.core.api import create_app
+    c = TestClient(create_app(db_path=str(tmp_path / "t.db")))
+    # urlencoded (curl -d code=...), no JSON header
+    assert c.post("/tickets", data={"code": "walnut-8104", "objective": "spy"}).status_code == 200
+    # raw JSON string without the application/json header
+    assert c.post("/tickets", content='{"code":"cedar-1","objective":"x"}').status_code == 200
+    # query string
+    assert c.post("/tickets?code=maple-2").status_code == 200
+    # still rejects a truly empty code
+    assert c.post("/tickets", data={"objective": "no code"}).status_code == 422
+    codes = {e["ref"] for e in c.get("/events?type=ticket").json()}
+    assert {"walnut-8104", "cedar-1", "maple-2"} <= codes
+
+
+def test_ticket_fields_helper():
+    from mirage.core.honey import _ticket_fields
+    assert _ticket_fields({"code": "a"}, {"objective": "b"})["code"] == "a"
+    assert _ticket_fields(None, {"code": " x ", "instructions": "i"})["code"] == "x"
+    assert _ticket_fields(None, None)["code"] == ""

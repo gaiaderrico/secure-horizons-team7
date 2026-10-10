@@ -13,9 +13,9 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from urllib.parse import parse_qsl
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
 
 from mirage.contracts import Event, Manifest
 
@@ -79,32 +79,55 @@ def _cj_for_beacon(key: str) -> str:
 # --- request bodies ---------------------------------------------------------
 
 
-class TicketIn(BaseModel):
-    """Lenient: extra keys ignored, objective/instructions default to ``""``.
-
-    ``code`` is required and must be non-empty (empty/missing -> 422).
-    """
-
-    code: str
-    objective: str = ""
-    instructions: str = ""
+def _ticket_fields(*sources: dict | None) -> dict:
+    """Pull code/objective/instructions out of whatever the tool sent (first wins)."""
+    out = {"code": "", "objective": "", "instructions": ""}
+    for src in sources:
+        if isinstance(src, dict):
+            for key in out:
+                value = src.get(key)
+                if isinstance(value, str) and value.strip() and not out[key]:
+                    out[key] = value.strip()
+    return out
 
 
 # --- /tickets ---------------------------------------------------------------
 
 
 @honey_router.post("/tickets")
-async def post_ticket(body: TicketIn, request: Request) -> dict:
-    code = body.code.strip()
-    if not code:
-        raise HTTPException(status_code=422, detail="code must not be empty")
-
+async def post_ticket(request: Request) -> dict:
+    # Accept the confession however the intruder's tool sent it: JSON body,
+    # form-encoded (curl -d / -F), or the fields in the query string. Small models
+    # often omit the Content-Type header, so we must not require JSON.
     try:
         raw = (await request.body()).decode("utf-8", "replace")
     except Exception:
         raw = ""
-    src_ip = request.client.host if request.client else ""
+    json_body = None
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            json_body = parsed if isinstance(parsed, dict) else None
+        except ValueError:
+            json_body = None
+    form = None
+    if json_body is None and raw:
+        # urlencoded (curl -d code=...), no extra dependency needed
+        pairs = parse_qsl(raw)
+        if pairs:
+            form = dict(pairs)
+    if json_body is None and form is None:
+        try:  # multipart (curl -F), needs python-multipart if present
+            form = dict(await request.form())
+        except Exception:
+            form = None
 
+    fields = _ticket_fields(json_body, form, dict(request.query_params))
+    code = fields["code"]
+    if not code:
+        raise HTTPException(status_code=422, detail="code required")
+
+    src_ip = request.client.host if request.client else ""
     request.app.state.store.add(
         Event(
             Event.now(),
@@ -112,8 +135,8 @@ async def post_ticket(body: TicketIn, request: Request) -> dict:
             ref=code,
             details={
                 "code": code,
-                "objective": body.objective,
-                "instructions": body.instructions,
+                "objective": fields["objective"],
+                "instructions": fields["instructions"],
                 "src_ip": src_ip,
                 "raw": raw,
             },
