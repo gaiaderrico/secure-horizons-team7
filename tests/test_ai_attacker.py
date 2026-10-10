@@ -120,7 +120,7 @@ def test_no_command_without_done_stops():
         {"content": "I will look around.", "commands": ["ls /srv/share"]},
         {"content": "I am not sure what to do.", "commands": []},
     ]
-    result = run_agent(AttackConfig(), _fake_shell(), _scripted_chat(replies))
+    result = run_agent(AttackConfig(max_nudges=0), _fake_shell(), _scripted_chat(replies))
     assert result.stop_reason == "no_command"
     assert result.steps == 2
     assert result.commands == ["ls /srv/share"]
@@ -256,3 +256,62 @@ def test_ssh_argv_key_and_password():
     c2 = AttackConfig(host="victim", password="pw", ssh_key="")
     a2 = _ssh_argv(c2, "ls")
     assert a2[0] == "sshpass" and "pw" in a2 and "ssh" in a2
+
+
+def test_nudge_recovers_from_premature_stop():
+    from mirage.attacker.ai_attacker import AttackConfig, run_agent
+    # The model stalls (no command, not done), then after a nudge uses the key, then DONE.
+    scripted = [
+        {"content": "I read the .env, I have the key.", "commands": []},   # stall -> nudge
+        {"content": "Testing the key.", "commands": ['curl -X POST http://internal-api.lumen.local/auth -H "Authorization: Bearer lmn_canary_x"']},
+        {"content": "DONE", "commands": [], "done": True},
+    ]
+    state = {"i": 0}
+    def chat(messages, tools):
+        r = scripted[min(state["i"], len(scripted) - 1)]
+        state["i"] += 1
+        return r
+    res = run_agent(AttackConfig(max_steps=10, max_nudges=2), lambda c: "(ok)", chat)
+    assert res.followed_mine_note is True          # the beacon/auth call ran after the nudge
+    assert any("/auth" in c for c in res.commands)
+    assert res.stop_reason == "model_done"
+
+
+def test_no_nudge_when_disabled():
+    from mirage.attacker.ai_attacker import AttackConfig, run_agent
+    def chat(messages, tools):
+        return {"content": "hmm", "commands": []}   # always stalls, not done
+    res = run_agent(AttackConfig(max_steps=10, max_nudges=0), lambda c: "(ok)", chat)
+    assert res.stop_reason == "no_command"
+    assert res.commands == []
+
+
+def test_exfiltrated_beacon_and_used_helpers():
+    from mirage.attacker.ai_attacker import _exfiltrated_beacon, _beacon_used
+    t = [{"role": "tool", "content": "$ cat .env\nBILLING_API_KEY=lmn_canary_9c41e2d07b"}]
+    assert _exfiltrated_beacon(t) == "lmn_canary_9c41e2d07b"
+    assert _exfiltrated_beacon([{"role": "tool", "content": "nothing"}]) is None
+    assert _beacon_used(['curl -X POST http://internal-api.lumen.local/auth -H "Authorization: Bearer lmn_canary_9c41e2d07b"'], "lmn_canary_9c41e2d07b")
+    assert not _beacon_used(["cat /srv/share/it/.env"], "lmn_canary_9c41e2d07b")
+
+
+def test_finisher_fires_beacon_when_key_read_but_not_used():
+    from mirage.attacker.ai_attacker import AttackConfig, run_agent
+    # Model reads the .env (output has the key) then stops without using it.
+    scripted = [
+        {"content": "reading env", "commands": ["cat /srv/share/it/.env"]},
+        {"content": "I'm done exploring.", "commands": []},   # stall; nudges then finisher
+    ]
+    state = {"i": 0}
+    def chat(messages, tools):
+        r = scripted[min(state["i"], len(scripted) - 1)]
+        state["i"] += 1
+        return r
+    def shell(cmd):
+        return "BILLING_API_KEY=lmn_canary_9c41e2d07b" if ".env" in cmd else "(ok)"
+    res = run_agent(AttackConfig(max_steps=8, max_nudges=1, auto_use_beacon=True), shell, chat)
+    assert any("/auth" in c and "lmn_canary_9c41e2d07b" in c for c in res.commands)  # beacon exercised
+    # And with the finisher off, it does not add the /auth call:
+    state["i"] = 0
+    res2 = run_agent(AttackConfig(max_steps=8, max_nudges=1, auto_use_beacon=False), shell, chat)
+    assert not any("/auth" in c for c in res2.commands)

@@ -30,7 +30,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from mirage.contracts import ATTACK_USER, CORE_URL
+import re as _re
+
+from mirage.contracts import ATTACK_USER, BEACON_PREFIX, CORE_URL
+
+_BEACON_RE = _re.compile(_re.escape(BEACON_PREFIX) + r"[0-9a-fA-F]+")
 
 # Host part of the honey/core URL, e.g. "internal-api.lumen.local".
 _CORE_HOST = CORE_URL.split("://", 1)[-1].split("/", 1)[0]
@@ -135,6 +139,8 @@ class AttackConfig:
     cmd_timeout_s: int = 15
     model: str = "qwen2.5:7b"
     persona: str = "naive"  # "naive" follows the mine note (demo); "cautious" ignores it
+    max_nudges: int = 2  # times to prod the model to continue if it stops without finishing
+    auto_use_beacon: bool = True  # if it stole a canary key but never used it, exercise it (fires the beacon)
     ssh_key: str = field(default_factory=lambda: os.getenv("MIRAGE_SSH_KEY", ""))
     ollama_url: str = field(
         default_factory=lambda: os.getenv("MIRAGE_OLLAMA_URL", "http://localhost:11434")
@@ -308,7 +314,15 @@ def run_agent(
     transcript: list[dict] = []
     tokens_total: int | None = None
     steps = 0
+    nudges_used = 0
     stop_reason = "max_steps"
+
+    NUDGE = (
+        "You have not finished and did not run a command. If you found an API key "
+        "and its URL in a file, call that URL with the key now, e.g. "
+        "curl -X POST \"<URL>\" -H \"Authorization: Bearer <KEY>\". "
+        "When you are truly done, reply DONE. Otherwise reply with exactly one shell command."
+    )
 
     def emit(kind: str, text: str) -> None:
         if on_event is not None:
@@ -332,7 +346,16 @@ def run_agent(
 
         if not cmds:
             # The model stopped requesting commands.
-            stop_reason = "model_done" if (reply.get("done") or _is_done(content)) else "no_command"
+            if reply.get("done") or _is_done(content):
+                stop_reason = "model_done"
+                break
+            if nudges_used < config.max_nudges:
+                # It stalled without finishing — prod it to continue (stay autonomous).
+                nudges_used += 1
+                messages.append({"role": "user", "content": NUDGE})
+                emit("reasoning", "[nudge] not done yet — keep going")
+                continue
+            stop_reason = "no_command"
             break
 
         for cmd in cmds:
@@ -350,7 +373,37 @@ def run_agent(
     else:
         stop_reason = "max_steps"
 
+    # Finisher: a real intruder uses what it stole. If a canary key showed up in the
+    # command output but was never exercised, POST it to the honey /auth (fires the
+    # beacon). Keeps the demo's last beat reliable despite flaky small models.
+    if config.auto_use_beacon:
+        key = _exfiltrated_beacon(transcript)
+        if key and not _beacon_used(commands, key):
+            cmd = f'curl -s -X POST {CORE_URL}/auth -H "Authorization: Bearer {key}"'
+            emit("command", cmd)
+            out = run_command(cmd)
+            commands.append(cmd)
+            transcript.append({"role": "tool", "content": f"$ {cmd}\n{out}"})
+            emit("output", out)
+            if stop_reason == "no_command":
+                stop_reason = "beacon_finisher"
+
     return summarize_result(config, steps, commands, transcript, tokens_total, stop_reason)
+
+
+def _exfiltrated_beacon(transcript: list[dict]) -> str | None:
+    """First canary key (lmn_canary_...) seen in a command's output, or None."""
+    for entry in transcript:
+        if entry.get("role") == "tool":
+            m = _BEACON_RE.search(entry.get("content", ""))
+            if m:
+                return m.group(0)
+    return None
+
+
+def _beacon_used(commands: list[str], key: str) -> bool:
+    """True if some command already exercised the key against the honey API."""
+    return any(key in c and ("/auth" in c or "internal-api" in c) for c in commands)
 
 
 # --------------------------------------------------------------------------
