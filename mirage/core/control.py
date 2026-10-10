@@ -142,7 +142,7 @@ def contain(incident_id: str, request: Request, body: ActionIn | None = None) ->
     attacker = _attacker_user(incident.events)
 
     ok, detail = request.app.state.guard.contain(
-        {"user": attacker, "incident": incident_id})
+        {"user": attacker, "incident": incident_id, "by": analyst})
     if not ok:
         raise HTTPException(status_code=502, detail=f"guard contain failed: {detail}")
 
@@ -160,7 +160,7 @@ def restore(incident_id: str, request: Request, body: ActionIn | None = None) ->
     attacker = _attacker_user(incident.events)
 
     ok, detail = request.app.state.guard.restore(
-        {"user": attacker, "incident": incident_id})
+        {"user": attacker, "incident": incident_id, "by": analyst})
     if not ok:
         raise HTTPException(status_code=502, detail=f"guard restore failed: {detail}")
 

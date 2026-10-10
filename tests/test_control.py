@@ -70,7 +70,7 @@ def test_contain_ok_flips_status_and_calls_guard(client):
     assert done[0]["details"] == {"user": ATTACK_USER, "by": "analyst"}
 
     # guard got the call with the right payload + token
-    assert fake.calls == [("contain", {"user": ATTACK_USER, "incident": inc_id})]
+    assert fake.calls == [("contain", {"user": ATTACK_USER, "incident": inc_id, "by": "analyst"})]
     assert fake.token == "tok-123"
 
 
@@ -133,7 +133,7 @@ def test_restore_ok_flips_status_and_records_files(client):
     done = client.get("/events", params={"type": "restore_done"}).json()
     assert len(done) == 1
     assert done[0]["details"] == {"files": ["cj1", "cj2", "cj3"], "by": "analyst"}
-    assert fake.calls == [("restore", {"user": ATTACK_USER, "incident": inc_id})]
+    assert fake.calls == [("restore", {"user": ATTACK_USER, "incident": inc_id, "by": "analyst"})]
 
 
 def test_restore_guard_failure_is_502(client):
