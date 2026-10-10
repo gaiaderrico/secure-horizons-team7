@@ -22,14 +22,20 @@ Command log: the victim's mirage-shell sends each command to the guard's unix so
 /run/mirage/cmd.sock. The guard identifies the sender itself (SO_PEERCRED + process tree, see
 `find_connection`) and is the only writer of COMMAND_LOG (root, 600): users can't forge or truncate it.
 
-Two mine detectors, both behind `mines_hit_by_command` / `mines_read`:
+Mine detectors (`Watcher`), each one enough on its own:
   1. a command names the mine (gives user, session and source IP);
-  2. the mine's atime moves (catches `grep -r`, globs, sftp...). Mines are "armed" with
-     atime < mtime, so with relatime the first read updates atime.
+  2. inotify on the mines' parent directories (`MineWatch`): any read, e.g. `grep -r`, globs, sftp.
+     Directory watches survive a replaced mine file and are re-synced every tick;
+  3. the mine's atime moves (backup; OFF where reads don't update atime, e.g. noatime mounts).
+
+restore / swap / contain / status from the CLI go through the running daemon's control API, so
+the daemon itself resets and re-arms (`mine watches armed: N/M` in the log). If the daemon is down
+the CLI does it locally, and the daemon notices the restore (state `restored_ts`) when it is back.
 """
 
 from __future__ import annotations
 
+import ctypes
 import fcntl
 import hashlib
 import hmac
@@ -45,6 +51,7 @@ import struct
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -137,7 +144,7 @@ def backup_path(p: Paths, cj: CrownJewel) -> str:
 # --------------------------------------------------------------------------
 
 CLEAN_STATE: dict[str, Any] = {"swapped": [], "swap_ts": None, "swap_ms": None,
-                               "intruder": None, "blocked": []}
+                               "intruder": None, "blocked": [], "restored_ts": None}
 
 
 def load_state(p: Paths) -> dict[str, Any]:
@@ -649,7 +656,8 @@ def do_restore(p: Paths, rep: Reporter, by: str = "analyst") -> dict[str, Any]:
     m = load_manifest(p)
     with Lock(p):
         files = restore_files(m, p)
-        save_state(p, dict(CLEAN_STATE))
+        # restored_ts tells the running daemon (whatever process did this) to re-arm
+        save_state(p, {**CLEAN_STATE, "restored_ts": time.time()})
         write_blocked(p, [])
         arm_mines(m)
     probs = leftovers(m, p)
@@ -765,31 +773,134 @@ def fix_perms(p: Paths) -> None:
 # --------------------------------------------------------------------------
 
 
-class Watcher:
-    """Command records come in through `ingest` (socket threads); `tick` checks mine atimes."""
+IN_ACCESS = 0x001  # data read
+IN_CLOSE_NOWRITE = 0x010  # a read-only open was closed (catches opens that read nothing)
+# Not IN_OPEN: it also fires when `seed` writes the mines. Writes give IN_CLOSE_WRITE instead.
+MINE_EVENTS = IN_ACCESS | IN_CLOSE_NOWRITE
 
-    def __init__(self, p: Paths, rep: Reporter, use_atime: bool = True):
-        self.p, self.rep, self.use_atime = p, rep, use_atime
+
+def parse_inotify(data: bytes) -> list[tuple[int, int, str]]:
+    """Raw inotify read() buffer -> [(wd, mask, name)]."""
+    out, i = [], 0
+    while i + 16 <= len(data):
+        wd, mask, _cookie, n = struct.unpack_from("iIII", data, i)
+        name = data[i + 16:i + 16 + n].split(b"\0", 1)[0].decode("utf-8", "replace")
+        out.append((wd, mask, name))
+        i += 16 + n
+    return out
+
+
+class MineWatch:
+    """inotify on the mines' parent DIRECTORIES, filtered by file name.
+
+    Watching a directory (not the file inode) keeps working when a mine file is replaced. `sync`
+    calls inotify_add_watch every time: the kernel returns the existing watch for a live directory
+    and a new one for a replaced directory (`seed --force`), even if it reuses the inode number.
+    Events come from the kernel, so reads from the victim container are seen; mount options
+    (noatime) don't matter.
+    """
+
+    def __init__(self) -> None:
+        libc = ctypes.CDLL(None, use_errno=True)
+        self._add_watch = libc.inotify_add_watch
+        fd = libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
+        if fd < 0:
+            raise OSError(ctypes.get_errno(), "inotify_init1 failed")
+        self.fd = fd
+        self.dirs: set[str] = set()  # dirs with a live watch
+        self.wds: dict[int, str] = {}  # watch descriptor -> dir
+        self.names: dict[str, set[str]] = {}  # dir -> mine file names in it
+
+    def sync(self, mine_paths: list[str]) -> int:
+        """(Re)watch the parent dir of every mine. Returns how many mines are armed."""
+        names: dict[str, set[str]] = {}
+        for path in mine_paths:
+            names.setdefault(os.path.dirname(path), set()).add(os.path.basename(path))
+        self.names = names
+        self.dirs = set()
+        for d in names:
+            wd = self._add_watch(self.fd, os.fsencode(d), MINE_EVENTS)  # idempotent
+            if wd < 0:
+                continue  # missing dir: retried on the next sync
+            self.wds[wd] = d
+            self.dirs.add(d)
+        return sum(1 for p in mine_paths if os.path.dirname(p) in self.dirs and os.path.exists(p))
+
+    def read(self) -> set[str]:
+        """Mine paths read since the last call (non-blocking, drains the queue)."""
+        hits: set[str] = set()
+        while True:
+            try:
+                data = os.read(self.fd, 65536)
+            except BlockingIOError:
+                return hits
+            for wd, mask, name in parse_inotify(data):
+                d = self.wds.get(wd)
+                if d is not None and mask & MINE_EVENTS and name in self.names.get(d, ()):
+                    hits.add(f"{d}/{name}")
+
+
+class Watcher:
+    """Command records come in through `ingest` (socket threads); `tick` checks the mine
+    watches (inotify, atime) and notices restores done by any process (state `restored_ts`)."""
+
+    def __init__(self, p: Paths, rep: Reporter, use_atime: bool = True,
+                 mine_watch: MineWatch | None = None):
+        self.p, self.rep, self.use_atime, self.mine_watch = p, rep, use_atime, mine_watch
         self.lock = threading.Lock()
         self.last_rec: dict[str, Any] | None = None
         self.recent: dict[str, float] = {}  # mine id -> time of last command hit
+        self.armed = 0
+        self.reset_seen = load_state(p).get("restored_ts")
 
     def ingest(self, rec: dict[str, Any]) -> None:
         with self.lock:
             self.handle(rec, load_manifest(self.p))
 
+    def detectors(self) -> dict[str, Any]:
+        return {"command": True, "inotify": self.mine_watch is not None, "atime": self.use_atime,
+                "mine_watches_armed": self.armed, "mines": len(load_manifest(self.p).mines)}
+
+    def rearm(self, why: str, drop_queued: bool = False) -> int:
+        """Fresh start after startup / contain / restore: forget recent hits, re-add watches,
+        reset atime baselines. drop_queued only when called right at the restore (API path):
+        a restore noticed later by `tick` must keep reads that came after it. Hold self.lock."""
+        m = load_manifest(self.p)
+        self.recent.clear()
+        self.reset_seen = load_state(self.p).get("restored_ts")
+        if self.mine_watch:
+            if drop_queued:
+                self.mine_watch.read()  # reads from before the reset are not a new intrusion
+            self.armed = self.mine_watch.sync([x.path for x in m.mines])
+        else:
+            self.armed = 0
+        arm_mines(m)
+        log(f"mine watches armed: {self.armed}/{len(m.mines)} after {why} "
+            f"(detectors: command ON, inotify {'ON' if self.mine_watch else 'OFF'}, "
+            f"atime {'ON' if self.use_atime else 'OFF'})")
+        return self.armed
+
     def tick(self) -> None:
-        if not self.use_atime:
-            return
         with self.lock:
+            if load_state(self.p).get("restored_ts") != self.reset_seen:
+                self.rearm("restore")  # done by another process (old CLI, fallback)
             m = load_manifest(self.p)
-            for mine in mines_read(m):
-                arm_mine(mine.path)
-                if time.time() - self.recent.get(mine.id, 0) < MINE_DEDUP_S:
+            hits: dict[str, str] = {}
+            if self.mine_watch:
+                self.armed = self.mine_watch.sync([x.path for x in m.mines])
+                hits.update((path, "inotify") for path in self.mine_watch.read())
+            if self.use_atime:
+                for mine in mines_read(m):
+                    arm_mine(mine.path)
+                    hits.setdefault(mine.path, "atime")
+            for mine in m.mines:
+                if mine.path not in hits:
                     continue
+                if time.time() - self.recent.get(mine.id, 0) < MINE_DEDUP_S:
+                    continue  # the read that follows a command we already handled
                 last = self.last_rec
                 rec = last if last and time.time() - float(last["ts"]) < 10 else None
-                self.mine_opened(mine, rec, via="atime")
+                self.mine_opened(mine, rec, via=hits[mine.path])
 
     def handle(self, rec: dict[str, Any], m: Manifest) -> None:
         self.last_rec = rec
@@ -826,7 +937,13 @@ class _Deferred:
         pass
 
 
-def make_handler(p: Paths, rep: Reporter):
+def make_handler(p: Paths, rep: Reporter, watcher: Watcher | None = None):
+    def rearm(why: str) -> int:
+        if watcher is None:
+            return 0
+        with watcher.lock:
+            return watcher.rearm(why, drop_queued=True)
+
     class Handler(BaseHTTPRequestHandler):
         def _reply(self, code: int, body: dict[str, Any]) -> None:
             data = json.dumps(body).encode()
@@ -845,7 +962,7 @@ def make_handler(p: Paths, rep: Reporter):
             if self.path == "/status":
                 if not self._authorized():
                     return self._reply(401, {"error": "bad token"})
-                return self._reply(200, status(p))
+                return self._reply(200, {**status(p), **({"detectors": watcher.detectors()} if watcher else {})})
             self._reply(404, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
@@ -861,9 +978,11 @@ def make_handler(p: Paths, rep: Reporter):
                 if self.path == "/swap":
                     return self._reply(200, do_swap(p, rep))
                 if self.path == "/contain":
-                    return self._reply(200, do_contain(p, rep, body.get("user", ""), by))
+                    out = do_contain(p, rep, body.get("user", ""), by)
+                    return self._reply(200, {**out, "mine_watches_armed": rearm(f"contain (by {by})")})
                 if self.path == "/restore":
-                    return self._reply(200, do_restore(p, rep, by))
+                    out = do_restore(p, rep, by)
+                    return self._reply(200, {**out, "mine_watches_armed": rearm(f"restore (by {by})")})
             except Exception as e:  # noqa: BLE001
                 log(f"ERROR {self.path}: {e}")
                 return self._reply(500, {"error": str(e)})
@@ -902,10 +1021,18 @@ def run_daemon(p: Paths) -> None:
     rep = Reporter(p)
     use_atime = os.environ.get("GUARD_ATIME", "1") == "1" and atime_works(p.guard_dir)
     log(f"atime mine detector: {'ON' if use_atime else 'OFF'}; core: {CORE_URL}")
-    server = ThreadingHTTPServer(("0.0.0.0", CONTROL_PORT), make_handler(p, rep))
+    mine_watch = None
+    if os.environ.get("GUARD_INOTIFY", "1") == "1":
+        try:
+            mine_watch = MineWatch()
+        except (OSError, AttributeError) as e:
+            log(f"WARNING inotify mine detector unavailable: {e}")
+    w = Watcher(p, rep, use_atime=use_atime, mine_watch=mine_watch)
+    with w.lock:
+        w.rearm("startup")
+    server = ThreadingHTTPServer(("0.0.0.0", CONTROL_PORT), make_handler(p, rep, w))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     log(f"control API on :{CONTROL_PORT} (token {'required' if GUARD_TOKEN else 'NOT set'})")
-    w = Watcher(p, rep, use_atime=use_atime)
     cmd_server = CommandServer(p, w)
     threading.Thread(target=cmd_server.serve_forever, daemon=True).start()
     log(f"command socket {p.cmd_socket} -> {p.command_log}, state={state_name(load_state(p))}")
@@ -917,6 +1044,22 @@ def run_daemon(p: Paths) -> None:
         time.sleep(POLL_S)
 
 
+def call_daemon(path: str, body: dict[str, Any] | None = None, method: str = "POST") -> dict[str, Any] | None:
+    """Call the running daemon's control API (same container). None if it is not running."""
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{CONTROL_PORT}{path}", method=method,
+        data=json.dumps(body or {}).encode() if method == "POST" else None,
+        headers={"Content-Type": "application/json", "X-Guard-Token": GUARD_TOKEN})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return {**json.loads(r.read()), "via": "daemon"}
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"guard daemon refused {path}: HTTP {e.code} {e.read()[:200]!r}") from e
+    except OSError as e:
+        log(f"daemon not reachable ({e}); doing {path} in this process")
+        return None
+
+
 def main(argv: list[str]) -> int:
     p = Paths()
     cmd = argv[1] if len(argv) > 1 else "run"
@@ -924,14 +1067,17 @@ def main(argv: list[str]) -> int:
         run_daemon(p)
         return 0
     rep = Reporter(p, sync=True)
+    # restore / swap / contain / status go through the running daemon, so it resets its own
+    # state and re-arms the mines. Local fallback only if the daemon is down.
     if cmd == "restore":
-        out = do_restore(p, rep, by="cli")
+        out = call_daemon("/restore", {"by": "cli"}) or do_restore(p, rep, by="cli (daemon down)")
     elif cmd == "swap":
-        out = do_swap(p, rep)
+        out = call_daemon("/swap", {"by": "cli"}) or do_swap(p, rep)
     elif cmd == "contain":
-        out = do_contain(p, rep, argv[2] if len(argv) > 2 else "", by="cli")
+        user = argv[2] if len(argv) > 2 else ""
+        out = call_daemon("/contain", {"user": user, "by": "cli"}) or do_contain(p, rep, user, by="cli")
     elif cmd == "status":
-        out = status(p)
+        out = call_daemon("/status", method="GET") or status(p)
     elif cmd == "check":
         probs = leftovers(load_manifest(p), p)
         print("CLEAN" if not probs else "\n".join(probs))

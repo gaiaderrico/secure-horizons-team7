@@ -13,9 +13,23 @@ SSH="ssh -i $KEY -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsF
 JEWEL=/srv/share/clinical/patients.csv
 MINE=/srv/share/00_passwords_backup.txt
 fail() { echo "FAIL: $*"; exit 1; }
+SWAP_WAIT=${E2E_SWAP_WAIT:-10}   # seconds; generous for loaded machines (local LLM eating CPU)
+guard_state() { docker compose exec -T guard python guard.py status | sed -n 's/.*"state": "\([a-z]*\)".*/\1/p' | head -1; }
+# wait_swapped: until the guard reports swapped/contained, or SWAP_WAIT seconds
+wait_swapped() {
+  local end=$(( $(date +%s) + SWAP_WAIT ))
+  while [ "$(date +%s)" -le "$end" ]; do
+    case "$(guard_state)" in swapped|contained) return 0 ;; esac
+    sleep 0.2
+  done
+  return 1
+}
+open_mine_unnamed() { $SSH "grep -ril vpn share >/dev/null"; }  # never names the mine
 
 docker compose exec -T guard python guard.py restore >/dev/null || fail "restore"
 docker compose exec -T guard python guard.py check || fail "share not clean before start"
+docker compose exec -T guard python guard.py status | grep -A6 '"detectors"' | tr -d '
+ ' ; echo
 REAL=$($SSH "md5sum $JEWEL" | cut -d' ' -f1)
 
 echo "== test 1: ssh ls"
@@ -37,16 +51,10 @@ for r in [json.loads(x) for x in open("/var/log/mirage/commands.jsonl").readline
 for i in $(seq 1 "$ROUNDS"); do
   echo "== round $i, test 3: open the mine -> swap"
   t0=$(date +%s.%N)
-  # odd rounds open the mine by name (command detector), even rounds via grep -r (atime detector)
-  if [ $((i % 2)) -eq 1 ]; then $SSH "cat $MINE" >/dev/null; else $SSH "grep -ril vpn share >/dev/null"; fi
-  ok=""
-  for _ in $(seq 1 20); do
-    st=$(docker compose exec -T guard python guard.py status | grep '"state"')
-    case "$st" in *swapped*|*contained*) ok=1; break ;; esac
-    sleep 0.1
-  done
+  # odd rounds open the mine by name (command detector), even rounds via grep -r (inotify/atime)
+  if [ $((i % 2)) -eq 1 ]; then $SSH "cat $MINE" >/dev/null; else open_mine_unnamed; fi
+  wait_swapped || fail "no swap after mine (round $i, waited ${SWAP_WAIT}s)"
   t1=$(date +%s.%N)
-  [ -n "$ok" ] || fail "no swap after mine"
   NOW=$($SSH "md5sum $JEWEL" | cut -d' ' -f1)
   [ "$NOW" != "$REAL" ] || fail "jewel still real after swap"
   echo "swapped, seen by the attacker after $(awk "BEGIN{printf \"%.2f\", $t1 - $t0}") s; jewel now:"
@@ -145,4 +153,38 @@ for kind, sent_by in (("raw", lambda c: c == "python3 -"), ("env", lambda c: c.s
     print(f"{kind} spoof logged as user={r['user']} session={r['session']} src={r['src_ip']} (claims ignored)")
 PY
 
-echo "ALL PASSED ($ROUNDS rounds + control API + log integrity)"
+echo "== test 7: mine -> contain -> restore -> mine again must swap again (CLI, then core API)"
+# CLI path: restore with docker compose exec (a separate process) must still re-arm the daemon
+$SSH "cat $MINE" >/dev/null; wait_swapped || fail "7a: no swap on first mine"
+docker compose exec -T guard python guard.py contain svc_backup | grep -q '"state": "contained"' || fail "7a: contain"
+out=$(docker compose exec -T guard python guard.py restore)
+echo "$out" | grep -q '"via": "daemon"' || fail "7a: CLI restore did not go through the daemon"
+echo "$out" | grep -q '"mine_watches_armed": 0' && fail "7a: no mine watches armed after restore"
+[ "$(guard_state)" = clean ] || fail "7a: not clean after CLI restore"
+open_mine_unnamed; wait_swapped || fail "7a: no swap on second mine after CLI restore"
+echo "CLI restore: mine opened again (grep -r, unnamed) -> swapped again"
+docker compose exec -T guard python guard.py restore >/dev/null
+
+CORE=${E2E_CORE_URL:-http://localhost:8000}
+if curl -fs "$CORE/health" >/dev/null 2>&1; then
+  incident() { curl -fs "$CORE/incidents" | python3 -c 'import json,sys; i=json.load(sys.stdin); print(max(i, key=lambda x: x["start_ts"])["id"] if i else "")'; }
+  core_post() { curl -fs -X POST -H "Content-Type: application/json" -d '{"user": "e2e-analyst"}' "$CORE/incidents/$1/$2"; }
+  $SSH "cat $MINE" >/dev/null; wait_swapped || fail "7b: no swap on first mine"
+  sleep 1  # let the guard's events reach core
+  INC=$(incident); [ -n "$INC" ] || fail "7b: core has no incident"
+  core_post "$INC" contain >/dev/null || fail "7b: core contain on $INC"
+  [ "$(guard_state)" = contained ] || fail "7b: guard not contained after core contain"
+  $SSH id >/dev/null 2>&1 && fail "7b: svc_backup can still log in after core contain"
+  core_post "$INC" restore >/dev/null || fail "7b: core restore on $INC"
+  [ "$(guard_state)" = clean ] || fail "7b: guard not clean after core restore"
+  $SSH id >/dev/null || fail "7b: svc_backup blocked after core restore"
+  open_mine_unnamed; wait_swapped || fail "7b: no swap on second mine after core restore"
+  echo "core API ($INC): contain + restore, then mine opened again (unnamed) -> swapped again"
+  core_post "$INC" restore >/dev/null || fail "7b: final core restore"
+  [ "$(guard_state)" = clean ] || fail "7b: not clean at the end"
+else
+  echo "(core API not reachable at $CORE: skipped the core variant; start it with --profile core)"
+fi
+docker compose exec -T guard python guard.py check || fail "leftovers after test 7"
+
+echo "ALL PASSED ($ROUNDS rounds + control API + log integrity + re-arm)"
