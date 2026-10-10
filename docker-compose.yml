@@ -1,0 +1,73 @@
+# MIRAGE: docker compose up --build -d
+# Needs .env with VICTIM_PASSWORD (copy .env.example).
+name: mirage
+
+services:
+  victim:
+    build: ./victim
+    hostname: lumen-fs01            # contracts.HOST
+    environment:
+      VICTIM_PASSWORD: ${VICTIM_PASSWORD:?set VICTIM_PASSWORD in .env}
+    ports:
+      - "2222:22"
+    volumes:
+      - srv:/srv                    # share + stage + vault_tmp (one filesystem: atomic rename)
+      - cmdlog:/var/log/mirage      # commands.jsonl: root-only, written by the guard only
+      - run:/run/mirage             # guard's command socket (cmd.sock), mirage-shell reports here
+      - ./keys:/keys:ro             # optional test key (keys/test_key.pub), git-ignored
+    networks:
+      mirage:
+        aliases: [lumen-fs01]
+    restart: unless-stopped
+
+  guard:
+    build:
+      context: .
+      dockerfile: guard/Dockerfile
+    # Same network namespace as the victim: the control API is http://victim:8081
+    # (contracts.GUARD_CONTROL_URL). Same PID namespace: Contain can kill sessions.
+    network_mode: "service:victim"
+    pid: "service:victim"
+    # Read the victim sshd's socket fds (sshd is non-dumpable) to find a session's source IP.
+    cap_add: [SYS_PTRACE]
+    depends_on: [victim]
+    environment:
+      CORE_URL: ${CORE_URL:-http://internal-api.lumen.local}
+      GUARD_TOKEN: ${GUARD_TOKEN:?set GUARD_TOKEN in .env (same value for guard and core)}
+    volumes:
+      - srv:/srv
+      - cmdlog:/var/log/mirage
+      - run:/run/mirage             # the guard listens on /run/mirage/cmd.sock
+      - vault:/vault                # real files during containment; NOT mounted in the victim
+      - mirage-etc:/etc/mirage      # manifest.json; NOT mounted in the victim
+      - ./generated:/seed:ro        # Thomas's prepare output (manifest.json, share/, stage/)
+    restart: unless-stopped
+
+  # Gaia's core API. Enable with --profile core until mirage/core is merged into this branch.
+  # TODO(core): drop the profile after the 23:00 merge.
+  core:
+    profiles: [core]
+    build:
+      context: .
+      dockerfile: mirage/core/Dockerfile
+    environment:
+      GUARD_TOKEN: ${GUARD_TOKEN:?set GUARD_TOKEN in .env (same value for guard and core)}
+    ports:
+      - "8000:80"
+    volumes:
+      - core-data:/data
+    networks:
+      mirage:
+        aliases: [internal-api.lumen.local]   # contracts.CORE_URL
+    restart: unless-stopped
+
+networks:
+  mirage:
+
+volumes:
+  srv:
+  cmdlog:
+  run:
+  vault:
+  mirage-etc:
+  core-data:

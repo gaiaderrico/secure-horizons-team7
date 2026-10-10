@@ -1,0 +1,6 @@
+# Files that run inside Linux containers must keep LF endings (Windows checkouts would add CR).
+*.sh text eol=lf
+victim/** text eol=lf
+guard/** text eol=lf
+scripts/** text eol=lf
+docker-compose.yml text eol=lf

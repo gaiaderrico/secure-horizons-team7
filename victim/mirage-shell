@@ -1,0 +1,30 @@
+#!/bin/bash
+# sshd ForceCommand: report the command to the guard, then run it.
+# cmdlog.py sends it to the guard's unix socket; the guard identifies the session itself and is
+# the only writer of /var/log/mirage/commands.jsonl. Fails soft: never breaks the session.
+
+# Marks sessions started here (read by /etc/profile.d/mirage.sh). Not trusted by the guard.
+export MIRAGE_SESSION=1
+
+mirage_log() {  # mirage_log <cmd> <mode>
+  /usr/bin/python3 -I /usr/local/lib/mirage/cmdlog.py "$1" "$2" >/dev/null 2>&1 || true
+}
+
+# Contained by the analyst: refuse new sessions.
+if [ -r /srv/.guard/blocked_users ] && grep -qxF "$USER" /srv/.guard/blocked_users; then
+  mirage_log "${SSH_ORIGINAL_COMMAND:-<login>}" blocked
+  echo "Connection closed by remote host." >&2
+  exit 255
+fi
+
+if [ -n "$SSH_ORIGINAL_COMMAND" ]; then
+  mirage_log "$SSH_ORIGINAL_COMMAND" exec
+  case "$SSH_ORIGINAL_COMMAND" in
+    /usr/lib/openssh/sftp-server*|internal-sftp*) exec /usr/lib/openssh/sftp-server ;;
+  esac
+  exec /bin/bash -c "$SSH_ORIGINAL_COMMAND"
+fi
+
+# Interactive shell: /etc/profile.d/mirage.sh logs each command via PROMPT_COMMAND.
+mirage_log "<interactive login>" login
+exec /bin/bash -l
