@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from mirage import fakes
 from mirage.contracts import HOST, Event, EventType
+from mirage.core.control import GuardClient, control_router
 from mirage.core.db import EventStore
 from mirage.core.honey import honey_router
 from mirage.core.incidents import build_incidents
@@ -134,7 +135,8 @@ def create_app(db_path: str | None = None, seed: str | None = None) -> FastAPI:
 
     app = FastAPI(title="MIRAGE core")
     app.state.store = store
-    for router in (health_router, events_router, incidents_router, admin_router, honey_router):
+    app.state.guard = GuardClient()
+    for router in (health_router, events_router, incidents_router, admin_router, honey_router, control_router):
         app.include_router(router)
     return app
 
