@@ -2,6 +2,10 @@
 
 import json
 import os
+import shutil
+import socket
+import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -195,11 +199,13 @@ def test_build_record_ignores_identity_claimed_by_client():
     assert g.build_record({"cmd": 5}, 0, "", "", 1.0)["user"] == "root"
 
 
+@pytest.mark.skipif(not hasattr(socket, "SO_PEERCRED"),
+                    reason="the guard reads the peer with SO_PEERCRED (Linux only; it runs in a Linux container)")
 def test_command_socket_round_trip_writes_log_and_swaps_before_ack(env):
-    import socket
-    import threading
-
     p, m = env
+    # AF_UNIX paths are limited (~104 bytes on macOS, 108 on Linux) and tmp_path can be deeper.
+    sock_dir = tempfile.mkdtemp(prefix="mrg", dir="/tmp" if os.path.isdir("/tmp") else None)
+    p.cmd_socket = f"{sock_dir}/cmd.sock"
     g.secure_log(p)
     rep = FakeReporter()
     w = g.Watcher(p, rep, use_atime=False)
@@ -221,3 +227,4 @@ def test_command_socket_round_trip_writes_log_and_swaps_before_ack(env):
     finally:
         srv.shutdown()
         srv.server_close()
+        shutil.rmtree(sock_dir, ignore_errors=True)
