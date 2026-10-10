@@ -4,6 +4,8 @@ import json
 import os
 import shutil
 import socket
+import struct
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -228,3 +230,73 @@ def test_command_socket_round_trip_writes_log_and_swaps_before_ack(env):
         srv.shutdown()
         srv.server_close()
         shutil.rmtree(sock_dir, ignore_errors=True)
+
+
+# --- inotify on the mines' directories; restores done by another process re-arm ----------
+
+inotify = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="inotify is Linux only")
+
+
+def test_parse_inotify():
+    buf = struct.pack("iIII", 3, g.IN_ACCESS, 0, 8) + b"m.txt\0\0\0" + struct.pack("iIII", 4, 0x10, 0, 0)
+    assert g.parse_inotify(buf) == [(3, g.IN_ACCESS, "m.txt"), (4, 0x10, "")]
+
+
+@inotify
+def test_mine_watch_survives_replaced_file_and_ignores_writes(env):
+    p, m = env
+    w = g.MineWatch()
+    assert w.sync([x.path for x in m.mines]) == 2
+    mine = m.mines[0].path
+    Path(mine).read_bytes()
+    assert w.read() == {mine}
+    # replace the mine with a new file (new inode), as a re-seed would: still watched
+    Path(mine + ".new").write_text("new mine\n")
+    os.replace(mine + ".new", mine)
+    assert w.read() == set()  # writing it is not an intrusion
+    assert w.sync([x.path for x in m.mines]) == 2
+    with open(mine) as f:  # opened read-only, nothing read
+        pass
+    assert w.read() == {mine}
+    # other files in the same directory don't count
+    Path(f"{os.path.dirname(mine)}/other.txt").write_text("x")
+    Path(f"{os.path.dirname(mine)}/other.txt").read_text()
+    assert w.read() == set()
+
+
+@inotify
+def test_mine_watch_follows_a_replaced_directory(env):
+    p, m = env
+    w = g.MineWatch()
+    mine = m.mines[1].path  # share/finance/old/...
+    w.sync([x.path for x in m.mines])
+    d = os.path.dirname(mine)
+    shutil.rmtree(d)
+    os.makedirs(d)
+    Path(mine).write_text("re-seeded\n")
+    assert w.sync([x.path for x in m.mines]) == 2
+    Path(mine).read_text()
+    assert w.read() == {mine}
+
+
+@inotify
+def test_watcher_mine_swap_restore_by_other_process_then_swaps_again(env, monkeypatch):
+    """mine (command) -> restore in ANOTHER process -> same mine read (no name) -> swap again."""
+    p, m = env
+    rep = FakeReporter()
+    w = g.Watcher(p, rep, use_atime=False, mine_watch=g.MineWatch())
+    with w.lock:
+        w.rearm("test")
+    rec = {"ts": 1.0, "session": "s-a", "user": "svc_backup", "src_ip": "10.0.0.9",
+           "cmd": f"cat {m.mines[0].path}"}
+    w.ingest(rec)
+    Path(m.mines[0].path).read_bytes()  # the cat itself
+    w.tick()  # its inotify event is the same hit: no second mine_opened
+    assert [e.type for e in rep.events].count("mine_opened") == 1
+    g.do_restore(p, FakeReporter(), by="other process")  # daemon not told directly
+    assert g.state_name(g.load_state(p)) == "clean"
+    Path(m.mines[0].path).read_bytes()  # grep -r: the command doesn't name the mine
+    w.tick()
+    assert [e.type for e in rep.events].count("mine_opened") == 2
+    assert rep.events[-1].type == "swap_done" and g.state_name(g.load_state(p)) == "swapped"
+    assert rep.events[-2].details["via"] == "inotify"

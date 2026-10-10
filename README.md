@@ -37,7 +37,9 @@ ssh -p 2222 svc_backup@localhost  # password = VICTIM_PASSWORD (jdupont works to
 - **guard**: identifies who sent each command itself (socket peer uid + the victim's process tree up to
   the root-owned sshd of that connection: user, session, source IP), and is the only writer of
   `/var/log/mirage/commands.jsonl` (root, 600). It POSTs every event to core (`CORE_URL/events`, fail soft), and swaps the
-  crown jewels for their fakes as soon as a mine is opened (by name in a command, or any read via atime).
+  crown jewels for their fakes as soon as a mine is opened: by name in a command, or any read of it
+  (inotify on the mines' directories; atime as a backup). Startup and every contain/restore log
+  `mine watches armed: N/M` with the detectors that are ON.
   Control API at `http://victim:8081` (`POST /swap|/contain|/restore`, `GET /status`, header `X-Guard-Token`).
 - Share content: Thomas's `python -m prepare.run_all` output in `./generated` (manifest.json, share/, stage/).
   If it's missing, a placeholder company from `mirage/fakes.py` is used. After regenerating:
@@ -62,5 +64,5 @@ shows `CONTAINED`, and `cat share/clinical/patients.csv` now returns the fake.
   still send made-up command text for its *own* session (it's logged as that session), and a
   process that double-forks out of its SSH session is logged with its real user but no session.
 - Guard: if the guard container is down, sessions keep working but their commands are not logged
-  (mine detection by atime resumes when it is back).
-- Guard: sftp sessions are logged as one `sftp-server` command; their file reads are only caught by atime.
+  (mine detection resumes when it is back; mine reads made meanwhile are not seen).
+- Guard: sftp sessions are logged as one `sftp-server` command; their file reads are caught by inotify/atime.
