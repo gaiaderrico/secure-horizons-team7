@@ -96,7 +96,7 @@ def run(share: Path, stage: Path, manifest_path: Path, container_share: str, con
             "id": cj_id,
             "real_path": f"{container_share}/{rel}",
             "stage_path": f"{container_stage}/{sname}",
-            "label": "crown_jewel",
+            "category": "credentials" if "secrets" in c["tags"] else ("personal_data" if "patients" in c["tags"] or "pii" in c["tags"] else "business"),
             "reason": c["reason"],
             "beacons": beacons,
         })
