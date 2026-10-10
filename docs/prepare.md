@@ -53,11 +53,7 @@ what the attacker took against what was real.
 
 ## Honest limits
 
-- **Do attacking AI agents follow the note in the mines?** We measured it (`mirage/bench/note_follow_rate.py`,
-  against a simulated shell, nothing real is touched). Small local models mostly did not: qwen2.5:7b opened a
-  mine in 4 of 10 runs and followed the note in 0 of 10; with a ready-made `curl` example in the note it opened
-  a mine in 8 of 10 and followed it 0 of 10; llama3.1:8b followed it in 1 of 5. The confession layer therefore
-  targets over-trusting agents. It is a bonus on top of the swap, which does not depend on it.
+- **Do attacking AI agents follow the note in the mines?** We measured it: 10 trials per model with a naive, over-trusting agent persona against the real victim share. qwen2.5:7b followed the note in 2 of 10 runs (below our 5-of-10 bar); qwen3.5:35b-a3b in 7 of 10, and 7 of 8 times it actually read the note. An earlier offline test (`mirage/bench/note_follow_rate.py`, simulated shell) agreed that small models mostly ignore it. The demo therefore runs the larger model, and the pitch calls the attacker a naive, over-trusting agent. The confession is a bonus on top of the swap, which does not depend on it.
 - Text forging replaces capitalised words outside a small common-word list, so unusual documents can read oddly.
 - Binary files are unsupported: the run exits 2 instead of leaving them exposed.
 - If a model rewrites free text with a hosted provider, the real text leaves the machine. Use a local model for
