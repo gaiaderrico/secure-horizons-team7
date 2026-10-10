@@ -1,0 +1,8 @@
+# Gitleaks config: default rules, plus an allowlist for synthetic test data.
+# mirage/fakes.py and .env.example contain only invented values (no real secrets).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic test fixtures and empty env template"
+paths = ['''mirage/fakes\.py''', '''\.env\.example''']

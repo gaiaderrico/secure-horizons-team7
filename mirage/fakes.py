@@ -156,7 +156,7 @@ P-2043,Sarah Petit,1995-12-08,Migraine,s.petit@lumen-mail.test
 """
 
 REAL_ENV = """BILLING_API_URL=https://billing.lumen.local
-BILLING_API_KEY=lmn_prod_REAL_DO_NOT_SHIP
+BILLING_API_KEY=lmn_prod_SYNTHETIC_TEST_ONLY
 DB_PASSWORD=Clinic-Prod-2026
 """
 
