@@ -196,8 +196,13 @@ def test_build_record_ignores_identity_claimed_by_client():
     msg = {"cmd": "cat /etc/passwd", "mode": "exec", "cwd": "/tmp",
            "user": "jdupont", "session": "s-evil", "src_ip": "6.6.6.6", "ts": 1.0}
     rec = g.build_record(msg, 1001, "s-real", "172.18.0.1", 100.0)
-    assert rec == {"ts": 100.0, "session": "s-real", "user": "svc_backup", "uid": 1001,
-                   "src_ip": "172.18.0.1", "cmd": "cat /etc/passwd", "mode": "exec", "cwd": "/tmp"}
+    # identity fields are the guard's, not the client's claims (claims are ignored)
+    assert {k: rec[k] for k in ("ts", "session", "user", "uid", "src_ip", "cmd", "mode", "cwd")} == {
+        "ts": 100.0, "session": "s-real", "user": "svc_backup", "uid": 1001,
+        "src_ip": "172.18.0.1", "cmd": "cat /etc/passwd", "mode": "exec", "cwd": "/tmp"}
+    # additive tamper-evidence fields: first record has no predecessor, hash commits to content
+    assert rec["prev_hash"] == ""
+    assert rec["hash"] == g.record_hash({k: v for k, v in rec.items() if k != "hash"})
     assert g.build_record({"cmd": 5}, 0, "", "", 1.0)["user"] == "root"
 
 

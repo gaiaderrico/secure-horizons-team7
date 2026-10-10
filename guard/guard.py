@@ -61,6 +61,7 @@ from typing import Any
 from mirage.contracts import (
     COMMAND_LOG,
     CORE_URL,
+    HOST,
     MANIFEST_PATH,
     SHARE_DIR,
     STAGE_DIR,
@@ -82,6 +83,7 @@ VICTIM_UIDS = dict(
     if ":" in kv
 )
 MINE_DEDUP_S = 5.0  # atime hit right after a command hit on the same mine = same event
+HEARTBEAT_INTERVAL_S = 5  # guard pings core /heartbeat this often; core alarms if it stops
 
 
 def log(msg: str) -> None:
@@ -328,14 +330,74 @@ def user_name(uid: int) -> str:
     return next((u for u, i in VICTIM_UIDS.items() if i == uid), "root" if uid == 0 else str(uid))
 
 
-def build_record(msg: dict[str, Any], uid: int, session: str, src_ip: str, ts: float) -> dict[str, Any]:
-    """Command record for the log. Only cmd/mode/cwd come from the client; the rest is ours."""
+def record_hash(content: dict[str, Any]) -> str:
+    """sha256 hex of a canonical dump of a record's content (its fields minus `hash`).
+
+    `content` already carries `prev_hash`, so the digest commits to both the record and
+    its link to the previous one: a modified field or a re-linked chain changes the hash.
+    """
+    canonical = json.dumps(content, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def build_record(msg: dict[str, Any], uid: int, session: str, src_ip: str, ts: float,
+                 prev_hash: str = "") -> dict[str, Any]:
+    """Command record for the log. Only cmd/mode/cwd come from the client; the rest is ours.
+
+    Tamper-evidence (additive): `prev_hash` is the previous record's `hash` ("" for the
+    first), and `hash` commits to this record's content + that link, forming a chain
+    `verify_log` can re-walk to spot a modified or deleted line.
+    """
     def text(k: str, limit: int) -> str:
         v = msg.get(k, "")
         return (v if isinstance(v, str) else str(v))[:limit]
 
-    return {"ts": ts, "session": session, "user": user_name(uid), "uid": uid, "src_ip": src_ip,
-            "cmd": text("cmd", 16384), "mode": text("mode", 32), "cwd": text("cwd", 1024)}
+    rec = {"ts": ts, "session": session, "user": user_name(uid), "uid": uid, "src_ip": src_ip,
+           "cmd": text("cmd", 16384), "mode": text("mode", 32), "cwd": text("cwd", 1024),
+           "prev_hash": prev_hash}
+    rec["hash"] = record_hash(rec)
+    return rec
+
+
+def last_log_hash(path: str) -> str:
+    """The `hash` of the last record in the log (to continue the chain after a restart)."""
+    try:
+        lines = [ln for ln in Path(path).read_text().splitlines() if ln.strip()]
+    except OSError:
+        return ""
+    if not lines:
+        return ""
+    try:
+        return str(json.loads(lines[-1]).get("hash", ""))
+    except ValueError:
+        return ""
+
+
+def verify_log(path: str) -> tuple[bool, str]:
+    """Re-walk the hash chain in the command log. Returns (ok, reason).
+
+    Detects a modified line (its content no longer matches its stored `hash`) and a
+    deleted/inserted line (the next record's `prev_hash` no longer matches the chain).
+    """
+    try:
+        lines = [ln for ln in Path(path).read_text().splitlines() if ln.strip()]
+    except OSError as e:
+        return False, f"cannot read log: {e}"
+    prev = ""
+    for i, line in enumerate(lines, start=1):
+        try:
+            rec = json.loads(line)
+        except ValueError as e:
+            return False, f"line {i}: not valid JSON ({e})"
+        if not isinstance(rec, dict) or "hash" not in rec or "prev_hash" not in rec:
+            return False, f"line {i}: missing hash fields"
+        content = {k: v for k, v in rec.items() if k != "hash"}
+        if record_hash(content) != rec["hash"]:
+            return False, f"line {i}: record hash mismatch (content modified)"
+        if rec["prev_hash"] != prev:
+            return False, f"line {i}: broken chain link (prev_hash does not match previous record)"
+        prev = rec["hash"]
+    return True, f"ok: {len(lines)} records"
 
 
 class CommandServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
@@ -346,6 +408,7 @@ class CommandServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     def __init__(self, p: Paths, watcher: Watcher):
         self.p, self.watcher = p, watcher
         self.log_lock = threading.Lock()
+        self.last_hash = last_log_hash(p.command_log)  # continue the chain across restarts
         self.sessions: dict[tuple[int, int], str] = {}  # connection -> src ip (cache)
         os.makedirs(os.path.dirname(p.cmd_socket), exist_ok=True)
         os.chmod(os.path.dirname(p.cmd_socket), 0o755)  # users can't delete or replace the socket
@@ -364,11 +427,16 @@ class CommandServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
             self.sessions[conn] = src_ip_of(conn[0])
         return session_id(conn), self.sessions[conn]
 
-    def record(self, rec: dict[str, Any]) -> None:
+    def record(self, msg: dict[str, Any], uid: int, session: str, src_ip: str, ts: float) -> dict[str, Any]:
+        # Build + chain + write under one lock so concurrent connections can't interleave
+        # the hash chain. The write call, open flags and permissions are unchanged.
         with self.log_lock:
+            rec = build_record(msg, uid, session, src_ip, ts, prev_hash=self.last_hash)
+            self.last_hash = rec["hash"]
             with open(self.p.command_log, "a") as f:
                 f.write(json.dumps(rec) + "\n")
         self.watcher.ingest(rec)
+        return rec
 
 
 class CommandHandler(socketserver.StreamRequestHandler):
@@ -382,7 +450,7 @@ class CommandHandler(socketserver.StreamRequestHandler):
             if not isinstance(msg, dict):
                 raise ValueError("not an object")
             session, src_ip = srv.identify(pid)
-            srv.record(build_record(msg, uid, session, src_ip, time.time()))
+            srv.record(msg, uid, session, src_ip, time.time())
             self.wfile.write(b"ok\n")  # after the swap, if this command opened a mine
         except Exception as e:  # noqa: BLE001 - a bad client must not hurt the guard
             log(f"cmd socket: rejected a record ({e!r})")
@@ -527,6 +595,36 @@ def post_event(core_url: str, ev: Event, timeout: float = 2.0) -> None:
                                  headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as r:
         r.read()
+
+
+def post_heartbeat(core_url: str, host: str = HOST, ts: float | None = None, timeout: float = 2.0) -> None:
+    """Liveness ping to core (same HTTP approach as post_event). Raises on failure."""
+    data = json.dumps({"host": host, "ts": ts if ts is not None else time.time()}).encode()
+    req = urllib.request.Request(f"{core_url.rstrip('/')}/heartbeat", data=data,
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        r.read()
+
+
+def heartbeat_loop(core_url: str = CORE_URL, interval: float = HEARTBEAT_INTERVAL_S) -> None:
+    """Daemon loop: best-effort heartbeat every `interval` s, swallowing every error so a
+    down/slow core never crashes or blocks the guard."""
+    while True:
+        try:
+            post_heartbeat(core_url)
+        except Exception:  # noqa: BLE001 - the heartbeat must never take the guard down
+            pass
+        time.sleep(interval)
+
+
+def start_heartbeat(core_url: str = CORE_URL) -> bool:
+    """Start the heartbeat thread, unless MIRAGE_NO_HEARTBEAT is set. Returns whether it started."""
+    if os.environ.get("MIRAGE_NO_HEARTBEAT"):
+        log("heartbeat disabled (MIRAGE_NO_HEARTBEAT set)")
+        return False
+    threading.Thread(target=heartbeat_loop, args=(core_url,), daemon=True).start()
+    log(f"heartbeat -> {core_url}/heartbeat every {HEARTBEAT_INTERVAL_S}s")
+    return True
 
 
 class Reporter:
@@ -1036,6 +1134,7 @@ def run_daemon(p: Paths) -> None:
     cmd_server = CommandServer(p, w)
     threading.Thread(target=cmd_server.serve_forever, daemon=True).start()
     log(f"command socket {p.cmd_socket} -> {p.command_log}, state={state_name(load_state(p))}")
+    start_heartbeat()
     while True:
         try:
             w.tick()
