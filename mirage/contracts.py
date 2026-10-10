@@ -33,7 +33,7 @@ STAGE_DIR = "/srv/.stage"  # fakes wait here (root, 700). Same filesystem as SHA
 VAULT_TMP_DIR = "/srv/.vault_tmp"  # real files land here during the swap (root, 700)
 VAULT_DIR = "/vault"  # real files copied here after the swap (root, 700)
 MANIFEST_PATH = "/etc/mirage/manifest.json"  # root, 600: the attacker must not see it
-COMMAND_LOG = "/var/log/mirage/commands.jsonl"  # written by cmdlog.sh, tailed by guard
+COMMAND_LOG = "/var/log/mirage/commands.jsonl"  # root-only: guard writes it (fed by mirage-shell over a root-owned socket), then tails it
 
 CORE_URL = "http://internal-api.lumen.local"  # core container, Docker network alias
 GUARD_CONTROL_URL = "http://victim:8081"  # guard's control API (contain / restore)
