@@ -4,5 +4,8 @@
 useDefault = true
 
 [allowlist]
-description = "Synthetic test fixtures and empty env template"
+description = "Synthetic test fixtures, empty env template, and the fake canary beacon format"
 paths = ['''mirage/fakes\.py''', '''\.env\.example''']
+# lmn_canary_... are deliberately-fake honeytokens (BEACON_PREFIX), never real secrets.
+# They legitimately appear in fakes, tests and docs by design.
+regexes = ['''lmn_canary_[0-9A-Fa-fx]+''']
