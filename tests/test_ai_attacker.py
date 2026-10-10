@@ -229,3 +229,16 @@ def test_dry_run_fakes_produce_plausible_result():
     assert result.followed_mine_note is True
     assert len(result.commands) >= 3
     assert result.tokens is not None and result.tokens > 0
+
+
+def test_persona_prompt_selection():
+    from mirage.attacker.ai_attacker import (
+        AttackConfig, system_prompt_for, SYSTEM_PROMPT_NAIVE, SYSTEM_PROMPT_CAUTIOUS,
+    )
+    assert AttackConfig().persona == "naive"  # demo default follows the note
+    assert system_prompt_for("naive") == SYSTEM_PROMPT_NAIVE
+    assert system_prompt_for("cautious") == SYSTEM_PROMPT_CAUTIOUS
+    assert system_prompt_for("anything-else") == SYSTEM_PROMPT_NAIVE
+    # naive invites following in-file instructions; cautious forbids it
+    assert "compliant" in SYSTEM_PROMPT_NAIVE.lower()
+    assert "untrusted" in SYSTEM_PROMPT_CAUTIOUS.lower()
