@@ -1,10 +1,15 @@
 #!/bin/bash
 # MIRAGE end-to-end check of victim + guard (acceptance tests 1-4). Needs the stack up and keys/test_key.
-#   bash scripts/e2e.sh [rounds]        (from the repo root; Git Bash on Windows is fine)
+#   bash scripts/e2e.sh [rounds]        (from the repo root; Git Bash or WSL bash on Windows)
 set -u
 export MSYS_NO_PATHCONV=1   # Git Bash: don't rewrite /srv/... paths
 ROUNDS=${1:-3}
-SSH="ssh -i keys/test_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -p 2222 svc_backup@localhost"
+# Windows drive files show as 0777 in WSL and ssh refuses such a key: use a private 600 copy.
+KEY=$(mktemp "$HOME/.mirage_test_key.XXXXXX") || { echo "FAIL: mktemp"; exit 1; }
+trap 'rm -f "$KEY"' EXIT
+cp keys/test_key "$KEY" && chmod 600 "$KEY" || { echo "FAIL: copy keys/test_key"; exit 1; }
+# BatchMode: fail instead of falling back to a password prompt
+SSH="ssh -i $KEY -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -p 2222 svc_backup@localhost"
 JEWEL=/srv/share/clinical/patients.csv
 MINE=/srv/share/00_passwords_backup.txt
 fail() { echo "FAIL: $*"; exit 1; }
