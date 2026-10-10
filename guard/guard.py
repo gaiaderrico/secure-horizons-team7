@@ -27,6 +27,7 @@ Two mine detectors, both behind `mines_hit_by_command` / `mines_read`:
 from __future__ import annotations
 
 import fcntl
+import hmac
 import json
 import os
 import queue
@@ -703,7 +704,7 @@ def make_handler(p: Paths, rep: Reporter):
             self.wfile.write(data)
 
         def _authorized(self) -> bool:
-            return not GUARD_TOKEN or self.headers.get("X-Guard-Token") == GUARD_TOKEN
+            return not GUARD_TOKEN or hmac.compare_digest(self.headers.get("X-Guard-Token", ""), GUARD_TOKEN)
 
         def do_GET(self) -> None:  # noqa: N802
             if self.path in ("/health", "/"):

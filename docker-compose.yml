@@ -30,7 +30,7 @@ services:
     depends_on: [victim]
     environment:
       CORE_URL: ${CORE_URL:-http://internal-api.lumen.local}
-      GUARD_TOKEN: ${GUARD_TOKEN:-}
+      GUARD_TOKEN: ${GUARD_TOKEN:?set GUARD_TOKEN in .env (same value for guard and core)}
     volumes:
       - srv:/srv
       - cmdlog:/var/log/mirage
@@ -47,7 +47,7 @@ services:
       context: .
       dockerfile: mirage/core/Dockerfile
     environment:
-      GUARD_TOKEN: ${GUARD_TOKEN:-}
+      GUARD_TOKEN: ${GUARD_TOKEN:?set GUARD_TOKEN in .env (same value for guard and core)}
     ports:
       - "8000:80"
     volumes:
