@@ -242,3 +242,17 @@ def test_persona_prompt_selection():
     # naive invites following in-file instructions; cautious forbids it
     assert "compliant" in SYSTEM_PROMPT_NAIVE.lower()
     assert "untrusted" in SYSTEM_PROMPT_CAUTIOUS.lower()
+
+
+def test_ssh_argv_key_and_password():
+    from mirage.attacker.ai_attacker import AttackConfig, _ssh_argv
+    # key auth: uses -i, no sshpass
+    c = AttackConfig(host="localhost", port=2222, ssh_key="/tmp/k", user="svc_backup")
+    a = _ssh_argv(c, "id")
+    assert a[0] == "ssh" and "sshpass" not in a
+    assert "-i" in a and "/tmp/k" in a and "2222" in a
+    assert a[-2] == "svc_backup@localhost" and a[-1] == "id"
+    # password auth: wraps in sshpass
+    c2 = AttackConfig(host="victim", password="pw", ssh_key="")
+    a2 = _ssh_argv(c2, "ls")
+    assert a2[0] == "sshpass" and "pw" in a2 and "ssh" in a2
