@@ -1,8 +1,7 @@
 """Turn the raw event stream into incidents (pure logic, no I/O).
 
 An incident = events on one host with no gap > window_s between consecutive
-events, containing at least one trigger (mine opened, ticket, beacon used, or a service
-account opening a crown jewel, real or already swapped: no mine fired, but it is an intrusion).
+events, containing at least one trigger (mine opened, ticket, beacon used).
 Recomputed from scratch on every call; ids are deterministic so the dashboard
 and contain/restore endpoints can rely on them.
 """
@@ -38,14 +37,8 @@ def group_events(events: list[Event], window_s: float = INCIDENT_WINDOW_S) -> li
     return groups
 
 
-def _service_account_read(e: Event) -> bool:
-    """A service account (svc_*) opening a crown jewel. Staff reading patient data is normal
-    work and stays silent; a service account has no reason to open these files by hand."""
-    return e.type == "file_opened" and e.user.startswith("svc_")
-
-
 def is_incident(group: list[Event]) -> bool:
-    return any(e.type in TRIGGER_TYPES or _service_account_read(e) for e in group)
+    return any(e.type in TRIGGER_TYPES for e in group)
 
 
 def incident_id(host: str, start_ts: float) -> str:

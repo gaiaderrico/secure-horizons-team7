@@ -67,6 +67,10 @@ def main() -> int:
 
     log = subprocess.run(["docker", "logs", "--since", since, "mirage-guard-1"], capture_output=True, text=True)
     lines = (log.stdout + log.stderr).splitlines()
+    # docker's --since can return a few lines from just before the start: keep only what follows
+    # our own reset (the first RESTORED line in the window).
+    start = next((i for i, x in enumerate(lines) if "RESTORED" in x), -1)
+    lines = lines[start + 1:]
     swaps = [x for x in lines if "CONTAINED: swapped" in x]
     mines = [x for x in lines if "MINE " in x and " opened " in x]
     incidents = json.load(urllib.request.urlopen("http://localhost:8000/incidents"))

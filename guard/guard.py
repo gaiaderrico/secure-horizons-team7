@@ -1009,23 +1009,8 @@ class Watcher:
         jewels = jewels_hit_by_command(rec["cmd"], m)
         if jewels:
             swapped = load_state(self.p)["swapped"]
-            if rec["user"].startswith("svc_") and any(cj.id not in swapped for cj in jewels):
-                # A service account has no reason to name a crown jewel: swap before the command
-                # runs (mirage-shell waits for our answer), so it reads the fake, not the real file.
-                swapped = self.jewel_named(jewels, rec)
             for cj in jewels:
                 self.rep.send(file_event(cj, rec, swapped))
-
-    def jewel_named(self, jewels: list[CrownJewel], rec: dict[str, Any]) -> list[str]:
-        who = {k: rec.get(k, "") for k in ("user", "session", "src_ip")}
-        log(f"CROWN JEWEL named by service account user={who['user']}: "
-            f"{[cj.id for cj in jewels]} -> swap before the command runs")
-        result = do_swap(self.p, _Deferred(self.rep), intruder=who)
-        if result["swapped"]:
-            self.rep.send(Event(Event.now(), "swap_done",
-                                details={"duration_ms": result["duration_ms"], "files": result["swapped"],
-                                         "via": "crown_jewel_named"}))
-        return load_state(self.p)["swapped"]
 
     def mine_opened(self, mine: Mine, rec: dict[str, Any] | None, via: str) -> None:
         who = {k: (rec or {}).get(k, "") for k in ("user", "session", "src_ip")}

@@ -35,12 +35,14 @@ Demo company: Lumen Health, a fictional clinic chain. All data is synthetic.
 | Metric | Result | How it was obtained |
 |---|---|---|
 | Detection rate | **10/10** live AI attacks caught by a mine (credentials_vault.txt ×6, all_patients_FULL_export_unmasked.csv ×3, 00_passwords_backup.txt ×1); **4/4** scripted scenarios labelled correctly | 10 live runs; logic test (`mirage/bench/run_bench.py`) |
-| False positives | **0/2** normal-activity runs flagged (normal user, backup job) | Scripted benchmark; long live run on normal traffic not yet done |
+| False positives | **0** swaps and **0** incidents in 8.3 min of live normal activity (112 commands: an employee + 4 backup-job runs that copy the crown jewels); 0/2 in the synthetic benchmark | Live run (`benign_soak.py`); logic test |
 | Time to detect | Mine opened → alert in core: **0.03–0.14 s** (9 runs); shown on the card within ~2 s (console refresh) | Live runs |
 | Time to respond (swap) | Median **2.2 ms**, range 0.4–12 ms (1.7 · 3.6 · 1.1 · 2.7 · 2.7 · 1.1 · 0.4 · 1.7 · 12.0 · 6.4) | Guard timings, 10 live runs |
 | Real files lost | **0** in **10/10** runs: everything taken after the mine was fake | 10 live runs |
-| AI confession (note followed) | **10/10** in these runs; earlier go/no-go: 7/10 qwen3.5:35b-a3b, 2/10 qwen2.5:7b | Live runs, local models |
+| AI confession (note followed) | **10/10** in the live runs; earlier go/no-go on a *simulated* server: 7/10 qwen3.5:35b-a3b, 2/10 qwen2.5:7b | Live runs, local models; `note_follow_rate.py` |
 | Confession checking | Each claim tagged confirmed / unverified / **contradicted** against the logs | Live runs |
+
+Reproduce: `python scripts/live_bench.py --runs 10` → `docs/live_bench_results.csv` (live runs) · `python scripts/benign_soak.py --minutes 8` (false positives, live) · `python -m mirage.bench.run_bench` (logic test on synthetic events).
 
 ## How humans stay in control
 
@@ -55,7 +57,8 @@ The intruder label never triggers an action, so a wrong label costs nothing. The
 
 ## Known limitations
 
-- The swap protects files not yet read. A crown jewel opened before a mine is "exposed" and scored Critical, honestly.
+- The swap protects files not yet read. A crown jewel opened before a mine is "exposed" and scored Critical, honestly. In our first live run the agent read the real 54 KB `patients.csv` and skipped a 474-byte mine next to it; we made the clinical mine a bigger patient CSV listed first, and all 10 live runs after that hit a mine first.
+- A stolen account that never opens a mine is not stopped by the swap. We tried swapping as soon as a service account names a crown jewel, but the legitimate backup job (same account) does exactly that: a false alarm, and the backup copied the fakes. We removed it; the mines alone caught 10/10 live runs.
 - The confession is a bonus layer and depends on the attacker's model; we report the rate per model.
 - If the guard is killed, commands are not logged meanwhile, but the console raises a "guard silent" heartbeat alarm.
 - A root attacker on the same machine could reach the vault; in production the vault is a separate machine or account.

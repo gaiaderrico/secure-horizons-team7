@@ -51,9 +51,9 @@ the product.
 
 ### 2a. Machine-checkable (just run these; they either confirm or they don't)
 - **Tests:** `python -m pytest -q` → ~247 passed.
-- **Metrics:** `python -m mirage.bench.run_bench` → should print **100% detection, 0% false positives**,
-  swap ~0.4 s, and the per-model note-follow rates. This is where the deck/defense-sheet numbers come
-  from — if the command disagrees with a slide, fix the slide.
+- **Metrics:** `python scripts/live_bench.py --runs 10` → the live numbers on the defense sheet (10/10 caught,
+  swap median 2.2 ms, 0 real files lost). `python -m mirage.bench.run_bench` is only a logic test on
+  synthetic events (its swap times are hand-written). If a command disagrees with a slide, fix the slide.
 - **Live demo:** `bash scripts/e2e.sh 3` → `ALL PASSED`. Then the full run in §4.
 - **Secrets:** `gitleaks git .` → `no leaks found`.
 
@@ -116,7 +116,7 @@ incident — what reset commands do I run?"*
   1. *"What's new vs Canary / SentinelOne?"* → they alert; we **swap the real data out of reach** on first
      touch, and we're the only one in the "lightweight + protects real data" quadrant (see the Competition slide).
   2. *"What if the AI doesn't follow the note?"* → the swap, detection and card still work; the confession
-     is a bonus, and we report the rate per model (7/10 with the big model).
+     is a bonus, and we report the rate per model (10/10 live with the big model, 2/10 for the small one on a simulated server).
   3. *"What if the attacker kills the guard / deletes tracks?"* → the log is root-only + hash-chained, and
      the console raises a **GUARD SILENT** alarm via the missed heartbeat (you can demo this live).
 - Ask Claude to drill you: *"Act as a hackathon judge for a deception-defense product and ask me 8 hard
@@ -140,7 +140,7 @@ incident — what reset commands do I run?"*
 
 - The swap protects files **not yet read**; a jewel opened before a mine is reported as "exposed"
   (Critical). Demo: trigger a mine first.
-- The confession depends on the attacker's model (small model 2/10, big model 7/10) — it's a bonus layer.
+- The confession depends on the attacker's model (big model 10/10 live; small model 2/10 on a simulated server) — it's a bonus layer.
 - Demo is one laptop + synthetic data + local Ollama; production maps to cloud-storage APIs (say this).
 - Pricing and exact market numbers need the §2b check.
 
