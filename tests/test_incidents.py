@@ -153,3 +153,24 @@ def test_contain_restore_sticky_across_window():
     incs = build_incidents(events)
     assert len(incs) == 1
     assert incs[0].status == "restored"
+
+
+def test_real_crown_jewel_read_without_mine_is_an_incident():
+    # Live run 2026-10-11: the AI agent read the real patients.csv and never opened a mine.
+    events = [
+        Event(T0, "command", user=ATTACK_USER, details={"cmd": "cat /srv/share/clinical/patients.csv"}),
+        Event(T0, "file_opened", user=ATTACK_USER, ref="cj1", details={"which": "real"}),
+    ]
+    [inc] = build_incidents(events)
+    assert inc.swapped is False
+    assert inc.real_files_lost == ["cj1"]
+
+
+def test_staff_reading_real_crown_jewel_is_not_an_incident():
+    events = [Event(T0, "file_opened", user="jdupont", ref="cj1", details={"which": "real"})]
+    assert build_incidents(events) == []
+
+
+def test_fake_file_read_alone_is_not_a_trigger():
+    events = [Event(T0, "file_opened", user="alice", ref="cj1", details={"which": "fake"})]
+    assert build_incidents(events) == []
