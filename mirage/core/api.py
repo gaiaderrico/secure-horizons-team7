@@ -25,6 +25,7 @@ from mirage.core.honey import honey_router
 from mirage.core.narrate import narrate_router
 from mirage.core.report_page import report_router
 from mirage.core.viewer import viewer_router
+from mirage.core.hero_page import hero_router
 from mirage.core.incidents import build_incidents
 
 DEFAULT_DB = "generated/core.db"
@@ -148,7 +149,7 @@ def create_app(db_path: str | None = None, seed: str | None = None) -> FastAPI:
     app.state.heartbeats = {}
     for router in (health_router, events_router, incidents_router, admin_router,
                    honey_router, control_router, narrate_router, card_router,
-                   heartbeat_router, viewer_router, report_router):
+                   heartbeat_router, viewer_router, report_router, hero_router):
         app.include_router(router)
     return app
 
