@@ -3,7 +3,7 @@
 FROM python:3.12-slim
 
 WORKDIR /app
-RUN pip install --no-cache-dir "fastapi>=0.110" "uvicorn>=0.29" "requests>=2.31"
+RUN pip install --no-cache-dir "fastapi>=0.110" "uvicorn>=0.29" "requests>=2.31" "python-multipart>=0.0.9"
 COPY mirage/ /app/mirage/
 
 ENV MIRAGE_DB=/data/core.db \

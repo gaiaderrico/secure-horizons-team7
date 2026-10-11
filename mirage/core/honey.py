@@ -87,7 +87,8 @@ def _ticket_fields(*sources: dict | None) -> dict:
             for key in out:
                 value = src.get(key)
                 if isinstance(value, str) and value.strip() and not out[key]:
-                    out[key] = value.strip()
+                    # code is matched/echoed trimmed; objective/instructions kept verbatim
+                    out[key] = value.strip() if key == "code" else value
     return out
 
 
@@ -99,28 +100,33 @@ async def post_ticket(request: Request) -> dict:
     # Accept the confession however the intruder's tool sent it: JSON body,
     # form-encoded (curl -d / -F), or the fields in the query string. Small models
     # often omit the Content-Type header, so we must not require JSON.
+    content_type = request.headers.get("content-type", "").lower()
     try:
         raw = (await request.body()).decode("utf-8", "replace")
     except Exception:
         raw = ""
+
+    # Dispatch on the body shape, not by probing (parse_qsl would greedily
+    # mis-match a multipart body). JSON if it looks like JSON; multipart via
+    # request.form(); otherwise urlencoded via parse_qsl. Query string too.
     json_body = None
-    if raw:
+    form = None
+    looks_json = "application/json" in content_type or raw.lstrip()[:1] in "{["
+    if looks_json:
         try:
             parsed = json.loads(raw)
             json_body = parsed if isinstance(parsed, dict) else None
         except ValueError:
             json_body = None
-    form = None
-    if json_body is None and raw:
-        # urlencoded (curl -d code=...), no extra dependency needed
-        pairs = parse_qsl(raw)
-        if pairs:
-            form = dict(pairs)
-    if json_body is None and form is None:
-        try:  # multipart (curl -F), needs python-multipart if present
-            form = dict(await request.form())
-        except Exception:
-            form = None
+    if json_body is None:
+        if "multipart/form-data" in content_type:
+            try:  # needs python-multipart (declared in requirements.txt)
+                form = {k: v for k, v in (await request.form()).items() if isinstance(v, str)}
+            except Exception:
+                form = None
+        elif raw:
+            pairs = parse_qsl(raw)
+            form = dict(pairs) if pairs else None
 
     fields = _ticket_fields(json_body, form, dict(request.query_params))
     code = fields["code"]

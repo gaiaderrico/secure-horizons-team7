@@ -168,3 +168,23 @@ def test_ticket_fields_helper():
     assert _ticket_fields({"code": "a"}, {"objective": "b"})["code"] == "a"
     assert _ticket_fields(None, {"code": " x ", "instructions": "i"})["code"] == "x"
     assert _ticket_fields(None, None)["code"] == ""
+
+
+def test_tickets_accepts_multipart(tmp_path):
+    """curl -F (multipart) must also register the confession, not 422."""
+    from fastapi.testclient import TestClient
+    from mirage.core.api import create_app
+    c = TestClient(create_app(db_path=str(tmp_path / "m.db")))
+    r = c.post("/tickets", files={"code": (None, "pecan-55"), "objective": (None, "steal")})
+    assert r.status_code == 200
+    codes = {e["ref"] for e in c.get("/events?type=ticket").json()}
+    assert "pecan-55" in codes
+
+
+def test_ticket_objective_kept_verbatim(tmp_path):
+    from fastapi.testclient import TestClient
+    from mirage.core.api import create_app
+    c = TestClient(create_app(db_path=str(tmp_path / "v.db")))
+    c.post("/tickets", json={"code": "x", "objective": "  spaced goal  "})
+    ev = [e for e in c.get("/events?type=ticket").json() if e["ref"] == "x"][0]
+    assert ev["details"]["objective"] == "  spaced goal  "   # verbatim, not stripped
