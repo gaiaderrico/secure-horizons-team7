@@ -32,15 +32,15 @@ Demo company: Lumen Health, a fictional clinic chain. All data is synthetic.
 
 ## Metrics
 
-| What | Result | How it was obtained |
+| Metric | Result | How it was obtained |
 |---|---|---|
-| Detection and intruder label | Correct on **4/4** scenarios (AI agent, AI guided by a human, script, human) | Logic test on hand-written event sequences (`mirage/fakes.py`), not live attacks |
-| AI confession (note followed) | **7/10** qwen3.5:35b-a3b · **2/10** qwen2.5:7b | Live runs, local Ollama models, no API key |
-| Confession checking | Each claim tagged confirmed / unverified / **contradicted** against the logs (e.g. "authorized pentest" → contradicted) | Live runs |
-| Time to swap, real files lost | Shown on the incident card for each live run (target < 1 s, 0 real files lost) | Live demo |
-| Detection and false-positive rates at scale | **Not yet measured** | Planned for 2–3 clinic pilots |
-
-The swap times in `mirage/fakes.py` are hard-coded test values, so we do not report them as measurements.
+| Detection rate | **10/10** live AI attacks caught by a mine (credentials_vault.txt ×6, all_patients_FULL_export_unmasked.csv ×3, 00_passwords_backup.txt ×1); **4/4** scripted scenarios labelled correctly | 10 live runs; logic test (`mirage/bench/run_bench.py`) |
+| False positives | **0/2** normal-activity runs flagged (normal user, backup job) | Scripted benchmark; long live run on normal traffic not yet done |
+| Time to detect | Mine opened → alert in core: **0.03–0.14 s** (9 runs); shown on the card within ~2 s (console refresh) | Live runs |
+| Time to respond (swap) | Median **2.2 ms**, range 0.4–12 ms (1.7 · 3.6 · 1.1 · 2.7 · 2.7 · 1.1 · 0.4 · 1.7 · 12.0 · 6.4) | Guard timings, 10 live runs |
+| Real files lost | **0** in **10/10** runs: everything taken after the mine was fake | 10 live runs |
+| AI confession (note followed) | **10/10** in these runs; earlier go/no-go: 7/10 qwen3.5:35b-a3b, 2/10 qwen2.5:7b | Live runs, local models |
+| Confession checking | Each claim tagged confirmed / unverified / **contradicted** against the logs | Live runs |
 
 ## How humans stay in control
 
