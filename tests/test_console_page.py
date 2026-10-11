@@ -17,6 +17,9 @@ def test_console_page_served(tmp_path):
     # edited by the analyst.
     assert "Keep watching" in r.text
     assert "Edit" in r.text
+    # Once approved, the report can be exported / shared to the authority.
+    assert "Download" in r.text
+    assert "Share" in r.text
 
 
 def test_console_page_endpoints_work_end_to_end(tmp_path):

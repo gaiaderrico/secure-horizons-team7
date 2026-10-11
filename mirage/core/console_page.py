@@ -164,9 +164,9 @@ _PAGE = r"""<!doctype html>
     border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
   button.approve:hover{filter:brightness(1.08)}
   button.approve[disabled]{background:#eef7f0;color:var(--ok);border-color:var(--ok);cursor:default;filter:none}
-  button.editbtn,button.editcancel{font-size:13px;font-weight:600;padding:9px 18px;border-radius:6px;
+  button.editbtn,button.editcancel,button.reportact{font-size:13px;font-weight:600;padding:9px 18px;border-radius:6px;
     border:1px solid var(--line);background:var(--paper);color:var(--ink);cursor:pointer}
-  button.editbtn:hover,button.editcancel:hover{background:var(--faint)}
+  button.editbtn:hover,button.editcancel:hover,button.reportact:hover{background:var(--faint)}
   /* ---- decision panel (under top bar) ---- */
   .actions{margin-top:16px;background:var(--paper);border:1px solid var(--line);border-radius:6px;
     box-shadow:0 1px 3px rgba(0,0,0,.06);display:flex;align-items:center;gap:14px;
@@ -404,6 +404,10 @@ function render(inc,card,summary){
     bodyRegion='<div class="rendered" id="reportBody">'+md(shownMd)+'</div>';
     btnRegion='<div class="reportbtns">'+
       '<button class="approve" id="approve" '+(approved?'disabled':'')+'>'+(approved?'Draft approved':'Approve draft')+'</button>'+
+      (approved
+        ? '<button class="reportact" id="downloadReport">Download report</button>'+
+          '<button class="reportact" id="shareReport">Share</button>'
+        : '')+
       '<button class="editbtn" id="editReport">Edit</button></div>';
   }
   const right=`
@@ -444,6 +448,88 @@ function wireReport(){
   };
   const cx=document.getElementById('cancelEdit');
   if(cx) cx.onclick=()=>{ editing=false; render(lastInc,lastCard,lastSummary); };
+  const dl=document.getElementById('downloadReport');
+  if(dl) dl.onclick=downloadReport;
+  const sh=document.getElementById('shareReport');
+  if(sh) sh.onclick=shareReport;
+}
+
+// Build one combined plain-text/markdown document from the APPROVED report:
+// the incident summary (analyst-edited text when edited, else the AI draft) plus
+// the NIS2 early-warning draft. Used by Download report and Share.
+function buildReportDoc(){
+  const id=(lastInc&&lastInc.id)||'';
+  const rawBody=stripBanner(lastSummary&&lastSummary.summary);
+  const summaryMd=(editText!=null?editText:rawBody);
+  const nis2Md=stripBanner(lastSummary&&lastSummary.nis2);
+  const when=new Date().toLocaleString();
+  return 'MIRAGE — Incident report\n'+
+    'Incident: '+id+'    Approved by analyst'+(edited?', edited':'')+' — '+when+'\n\n'+
+    '===== Incident summary =====\n'+summaryMd+'\n\n'+
+    '===== NIS2 early warning (Article 23) =====\n'+nis2Md+'\n';
+}
+
+function safeId(){
+  const id=String((lastInc&&lastInc.id)||'incident');
+  return id.replace(/[^A-Za-z0-9._-]/g,'_')||'incident';
+}
+
+// Download report: client-side only — a text/markdown Blob + object URL.
+function downloadReport(){
+  const doc=buildReportDoc();
+  try{
+    const blob=new Blob([doc],{type:'text/markdown'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url; a.download='MIRAGE-incident-'+safeId()+'.md';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),0);
+  }catch(e){ showManualCopy(doc); }
+}
+
+// Share: Web Share API inside the click (user gesture), else copy to clipboard,
+// else a selectable textarea modal for manual copy.
+async function shareReport(){
+  const doc=buildReportDoc();
+  const title='MIRAGE incident report '+((lastInc&&lastInc.id)||'');
+  const data={title:title,text:doc};
+  if(navigator.share && (typeof navigator.canShare!=='function' || navigator.canShare(data))){
+    try{
+      await navigator.share(data);
+      return;
+    }catch(e){
+      if(e && e.name==='AbortError') return;  // user cancelled; nothing to do
+      // any other share failure falls through to the clipboard fallback
+    }
+  }
+  try{
+    await navigator.clipboard.writeText(doc);
+    showBanner('good','Report copied to clipboard — ready to send to the authority.');
+  }catch(e){
+    showManualCopy(doc);
+  }
+}
+
+// Last-resort fallback: a simple selectable modal so the analyst can copy manually.
+function showManualCopy(doc){
+  let ov=document.getElementById('copyOv');
+  if(!ov){
+    ov=document.createElement('div');
+    ov.id='copyOv'; ov.className='modal-ov';
+    ov.innerHTML='<div class="modal" role="dialog" aria-modal="true">'+
+      '<h3>Copy the report</h3>'+
+      '<p>Select all and copy the report below to send it to the authority.</p>'+
+      '<textarea class="editarea" id="copyArea" readonly style="min-height:260px"></textarea>'+
+      '<div class="modal-btns" style="margin-top:16px">'+
+      '<button class="mbtn cancel" id="copyClose">Close</button></div></div>';
+    document.body.appendChild(ov);
+    ov.onclick=e=>{ if(e.target.id==='copyOv') ov.classList.remove('show'); };
+    ov.querySelector('#copyClose').onclick=()=>ov.classList.remove('show');
+  }
+  const ta=ov.querySelector('#copyArea');
+  ta.value=doc;
+  ov.classList.add('show');
+  ta.focus(); ta.select();
 }
 
 // Build the decision panel for the given status and wire its choices.
