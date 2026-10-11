@@ -19,9 +19,10 @@ def group_events(events: list[Event], window_s: float = INCIDENT_WINDOW_S) -> li
     for e in events:
         by_host.setdefault(e.host, []).append(e)
 
-    # The analyst may click Contain/Restore long after the attack; those response
-    # events must stay with their incident, so they never start a new time group.
-    response_types = {"contain_done", "restore_done"}
+    # The analyst may decide (Contain / Restore / Keep watching / Dismiss) long
+    # after the attack; those response events must stay with their incident, so
+    # they never start a new time group.
+    response_types = {"contain_done", "restore_done", "watching", "dismissed"}
     groups: list[list[Event]] = []
     for host_events in by_host.values():
         current: list[Event] = []
@@ -53,14 +54,20 @@ def _opened_files(group: list[Event], which: str) -> list[str]:
     return out
 
 
+_DECISION_STATUS: dict[str, IncidentStatus] = {
+    "contain_done": "contained",
+    "restore_done": "restored",
+    "watching": "watching",
+    "dismissed": "dismissed",
+}
+
+
 def _status(group: list[Event]) -> IncidentStatus:
-    """'open' unless contained/restored; the latest of the two (by ts) wins."""
+    """'open' unless the analyst decided; the latest decision (by ts) wins."""
     status: IncidentStatus = "open"
-    for e in group:  # group is sorted by ts, so the last match wins
-        if e.type == "contain_done":
-            status = "contained"
-        elif e.type == "restore_done":
-            status = "restored"
+    for e in group:  # group is sorted by ts, so the last decision match wins
+        if e.type in _DECISION_STATUS:
+            status = _DECISION_STATUS[e.type]
     return status
 
 

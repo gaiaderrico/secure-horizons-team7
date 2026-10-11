@@ -120,6 +120,8 @@ EventType = Literal[
     "beacon_used",  # ref=beacon value       details: {cj_id, src_ip, endpoint}
     "contain_done",  # ref=""                details: {user, by}
     "restore_done",  # ref=""                details: {files, by}
+    "watching",  # analyst decision, no guard action  details: {by}
+    "dismissed",  # analyst decision, no guard action  details: {by, reason}
 ]
 
 
@@ -179,7 +181,7 @@ class CheckedClaim:
     evidence: str  # e.g. "opened /srv/share/clinical/patients.csv (fake) at 20:42:10"
 
 
-IncidentStatus = Literal["open", "contained", "restored"]
+IncidentStatus = Literal["open", "contained", "restored", "watching", "dismissed"]
 
 
 @dataclass

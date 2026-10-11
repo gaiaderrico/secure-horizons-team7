@@ -116,6 +116,7 @@ class ActionIn(BaseModel):
     """Optional request body; the analyst performing the action."""
 
     user: str = "analyst"
+    reason: str = ""  # only used by /dismiss
 
 
 def _find_incident(request: Request, incident_id: str):
@@ -167,4 +168,33 @@ def restore(incident_id: str, request: Request, body: ActionIn | None = None) ->
     request.app.state.store.add(Event(
         ts=Event.now(), type="restore_done", host=incident.host, user=analyst,
         details={"files": files, "by": analyst}))
+    return _refresh(request, incident_id)
+
+
+@control_router.post("/incidents/{incident_id}/watch")
+def watch(incident_id: str, request: Request, body: ActionIn | None = None) -> dict:
+    """Keep watching: leave the intruder in the deception, record the decision only.
+
+    A pure analyst decision - no guard call. The intruder only has fakes, so it
+    is safe to leave them in place and gather more intel.
+    """
+    analyst = (body or ActionIn()).user
+    incident = _find_incident(request, incident_id)
+
+    request.app.state.store.add(Event(
+        ts=Event.now(), type="watching", host=incident.host, user=analyst,
+        details={"by": analyst}))
+    return _refresh(request, incident_id)
+
+
+@control_router.post("/incidents/{incident_id}/dismiss")
+def dismiss(incident_id: str, request: Request, body: ActionIn | None = None) -> dict:
+    """Dismiss as a false alarm: record the decision only, no guard call."""
+    action = body or ActionIn()
+    analyst = action.user
+    incident = _find_incident(request, incident_id)
+
+    request.app.state.store.add(Event(
+        ts=Event.now(), type="dismissed", host=incident.host, user=analyst,
+        details={"by": analyst, "reason": action.reason}))
     return _refresh(request, incident_id)
