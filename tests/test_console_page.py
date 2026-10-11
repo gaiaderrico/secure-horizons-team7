@@ -20,6 +20,8 @@ def test_console_page_served(tmp_path):
     # Once approved, the report can be exported / shared to the authority.
     assert "Download" in r.text
     assert "Share" in r.text
+    # The "Keep watching" payoff panel is present in the page source.
+    assert "Intelligence" in r.text
 
 
 def test_console_page_endpoints_work_end_to_end(tmp_path):

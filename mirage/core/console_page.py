@@ -194,6 +194,25 @@ _PAGE = r"""<!doctype html>
   .dnote.amber{color:var(--warn);border-color:var(--warn);background:#fdf6e6}
   .dnote.grey{color:var(--grey);border-color:#c7cfd3;background:#eef1f2}
   .dnote.ok{color:var(--ok);border-color:var(--ok);background:#eaf5ee}
+  /* ---- intelligence-while-watching panel ---- */
+  .intel{margin-top:16px;padding:15px 18px;border-left:5px solid var(--warn)}
+  .intel-head{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid var(--line);
+    padding-bottom:7px;margin-bottom:10px;flex-wrap:wrap}
+  .intel-head h3{margin:0;font-size:12px;letter-spacing:.8px;text-transform:uppercase;color:var(--warn)}
+  .intel-count{margin-left:auto;font-size:12.5px;font-weight:800;color:var(--ink);
+    font-variant-numeric:tabular-nums}
+  .intel-empty{font-size:13px;color:var(--muted);margin:2px 0}
+  .intel-list{list-style:none;margin:0;padding:0;max-height:260px;overflow:auto;font-size:12.5px}
+  .intel-list li{display:flex;gap:9px;padding:6px 0;border-bottom:1px dashed var(--line);align-items:baseline}
+  .intel-list li:last-child{border-bottom:0}
+  .intel-list .clk{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
+    color:var(--muted);flex:none;width:64px;font-variant-numeric:tabular-nums}
+  .intel-list .tid{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
+    font-weight:700;color:var(--accent);flex:none;width:72px}
+  .intel-list .ty{flex:none;font-weight:700;width:96px}
+  .intel-list .dt{color:var(--muted);flex:1;word-break:break-all}
+  .intel-list li.new{animation:intelfade 1.6s ease-out}
+  @keyframes intelfade{from{background:#fdf1cf}to{background:transparent}}
   /* ---- confirmation modal ---- */
   .modal-ov{position:fixed;inset:0;z-index:50;background:rgba(20,25,28,.45);
     display:none;align-items:center;justify-content:center;padding:20px}
@@ -237,6 +256,13 @@ _PAGE = r"""<!doctype html>
     <div class="banner" id="banner"></div>
     <div class="acts" id="acts"></div>
   </div>
+  <div class="panel intel" id="intel" style="display:none">
+    <div class="intel-head">
+      <h3>Intelligence gathered while observing</h3>
+      <span class="intel-count" id="intelCount"></span>
+    </div>
+    <div id="intelBody"></div>
+  </div>
   <div id="main">
     <div class="panel"><div class="idle">
       <div class="pulse"></div>
@@ -268,6 +294,7 @@ let edited=false;      // analyst edited the draft, reset per new incident
 let editing=false;     // the report body is in textarea edit mode
 let editText=null;     // the analyst-edited markdown (null = use the AI draft)
 let lastInc=null,lastCard=null,lastSummary=null;  // for in-place re-renders
+let prevIntelKeys=null; // keys shown in the previous poll (null = panel was hidden)
 
 function esc(s){return (s==null?"":String(s)).replace(/[&<>"]/g,c=>(
   {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
@@ -278,6 +305,83 @@ function clockOf(ts){
   if(!isFinite(n)||n<=0) return '--:--:--';
   const d=new Date(n*1000), p=x=>String(x).padStart(2,'0');
   return p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
+}
+
+// --- "Intelligence gathered while observing" panel -------------------------
+// Only shown while the incident status is "watching". It makes the payoff of
+// "Keep watching" visible: everything the intruder does in the decoys after the
+// analyst chose to observe, with nothing real at risk.
+const INTEL_TYPES=new Set(['command','file_opened','ticket','beacon_used']);
+
+// ts of the LATEST "watching" event in the incident's events (null if none).
+function watchStartTs(inc){
+  let t=null;
+  for(const e of ((inc&&inc.events)||[])){
+    if(e&&e.type==='watching'){ const n=Number(e.ts); if(isFinite(n)&&(t===null||n>t)) t=n; }
+  }
+  return t;
+}
+// ATT&CK technique id for an event, from the card timeline entry at the same
+// ts/type (if any); '' when there is no match or no technique.
+function techFor(e){
+  const tl=(lastCard&&lastCard.timeline)||[];
+  for(const t of tl){
+    if(t&&t.technique_id&&t.type===e.type&&Number(t.ts)===Number(e.ts)) return t.technique_id;
+  }
+  return '';
+}
+// Short detail for one observation line.
+function intelDetail(e){
+  const d=(e&&e.details)||{};
+  return d.cmd||d.path||e.ref||'';
+}
+// Stable-ish key so we can tell genuinely new rows from ones seen last poll.
+function intelKey(e){
+  return Number(e.ts)+'|'+e.type+'|'+(e.ref||'')+'|'+intelDetail(e);
+}
+
+// Rebuild the panel from lastInc. Called on every render and every 2s poll.
+function updateIntel(){
+  const panel=document.getElementById('intel');
+  if(!panel) return;
+  const inc=lastInc;
+  const watching=inc&&(inc.status||'').toLowerCase()==='watching';
+  if(!watching){
+    panel.style.display='none';
+    prevIntelKeys=null;   // reset so a later watch does not flash old rows
+    return;
+  }
+  const watchTs=watchStartTs(inc);
+  const since=clockOf(watchTs);
+  const evs=((inc.events||[]).filter(e=>
+    e&&INTEL_TYPES.has(e.type)&&watchTs!=null&&Number(e.ts)>watchTs));
+  evs.sort((a,b)=>Number(b.ts)-Number(a.ts));  // newest first
+
+  const keys=new Set(evs.map(intelKey));
+  const firstShow=(prevIntelKeys===null);  // panel just appeared: don't flash all
+
+  const cnt=document.getElementById('intelCount');
+  if(cnt) cnt.textContent=evs.length+' observation'+(evs.length===1?'':'s')+' since '+since;
+
+  const body=document.getElementById('intelBody');
+  if(body){
+    if(!evs.length){
+      body.innerHTML='<p class="intel-empty">Observing &mdash; the intruder is still in the '+
+        'decoys; no new activity since '+esc(since)+'. Nothing real is at risk.</p>';
+    }else{
+      body.innerHTML='<ul class="intel-list">'+evs.map(e=>{
+        const fresh=(!firstShow&&prevIntelKeys&&!prevIntelKeys.has(intelKey(e)));
+        const tid=techFor(e);
+        return '<li'+(fresh?' class="new"':'')+'>'+
+          '<span class="clk">'+clockOf(e.ts)+'</span>'+
+          '<span class="tid">'+esc(tid||'—')+'</span>'+
+          '<span class="ty">'+esc(e.type)+'</span>'+
+          '<span class="dt">'+esc(intelDetail(e))+'</span></li>';
+      }).join('')+'</ul>';
+    }
+  }
+  prevIntelKeys=keys;
+  panel.style.display='';
 }
 
 // Small, safe markdown -> HTML. Input is escaped FIRST, so no raw HTML can pass.
@@ -333,6 +437,8 @@ function renderIdle(){
     '<p>System monitoring. This console populates automatically when a mine is opened.</p></div></div>';
   document.getElementById('actions').style.display='none';
   document.getElementById('acts').innerHTML='';
+  prevIntelKeys=null;
+  document.getElementById('intel').style.display='none';
 }
 
 function chip(status){
@@ -431,6 +537,7 @@ function render(inc,card,summary){
   setSeverity(sv);
   setStatus(inc.status);
   renderDecision(inc.status);
+  updateIntel();
   wireReport();
 }
 
@@ -668,8 +775,11 @@ async function tick(){
     if(!incs.length){ if(curId!==null) renderIdle(); return; }
     const inc=incs[0];
     if(inc.id===curId){
-      // Same incident: keep UI state, just reflect any live status change.
+      // Same incident: keep UI state, just reflect any live status change and
+      // refresh the "intelligence while observing" panel with fresh events.
+      lastInc=inc;
       if((inc.status||'').toLowerCase()!==curStatus){ setStatus(inc.status); renderDecision(inc.status); }
+      updateIntel();
       return;
     }
     const [card,summary]=await Promise.all([
