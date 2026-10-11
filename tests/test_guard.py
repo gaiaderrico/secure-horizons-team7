@@ -118,6 +118,31 @@ def test_watcher_mine_command_swaps_and_reports_in_order(env):
     assert g.state_name(g.load_state(p)) == "clean"
 
 
+def test_service_account_naming_crown_jewel_swaps_before_the_read(env):
+    # Live run 2026-10-11: the AI agent went straight for it/.env, no mine opened.
+    p, m = env
+    rep = FakeReporter()
+    w = g.Watcher(p, rep, use_atime=False)
+    w.ingest({"ts": 10.0, "session": "s-a", "user": "svc_backup", "src_ip": "10.0.0.9",
+              "cmd": f"cat {m.crown_jewels[1].real_path}"})
+    types = [e.type for e in rep.events]
+    assert types == ["command", "swap_done", "file_opened"]
+    assert rep.events[1].details["via"] == "crown_jewel_named"
+    assert rep.events[2].details["which"] == "fake"
+    assert g.state_name(g.load_state(p)) == "swapped"
+
+
+def test_staff_naming_crown_jewel_does_not_swap(env):
+    p, m = env
+    rep = FakeReporter()
+    w = g.Watcher(p, rep, use_atime=False)
+    w.ingest({"ts": 10.0, "session": "s-b", "user": "jdupont", "src_ip": "10.0.0.7",
+              "cmd": f"cat {m.crown_jewels[0].real_path}"})
+    assert [e.type for e in rep.events] == ["command", "file_opened"]
+    assert rep.events[1].details["which"] == "real"
+    assert g.state_name(g.load_state(p)) == "clean"
+
+
 def test_atime_detector(env):
     p, m = env
     if not g.atime_works(p.guard_dir):

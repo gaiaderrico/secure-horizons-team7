@@ -174,3 +174,14 @@ def test_staff_reading_real_crown_jewel_is_not_an_incident():
 def test_fake_file_read_alone_is_not_a_trigger():
     events = [Event(T0, "file_opened", user="alice", ref="cj1", details={"which": "fake"})]
     assert build_incidents(events) == []
+
+
+def test_service_account_reading_swapped_jewel_is_an_incident():
+    # The guard swapped before the command ran, so the attacker read the fake.
+    events = [
+        Event(T0, "swap_done", details={"duration_ms": 0.2, "files": ["cj2"], "via": "crown_jewel_named"}),
+        Event(T0, "file_opened", user=ATTACK_USER, ref="cj2", details={"which": "fake"}),
+    ]
+    [inc] = build_incidents(events)
+    assert inc.swapped is True
+    assert inc.real_files_lost == [] and inc.fakes_taken == ["cj2"]

@@ -11,6 +11,9 @@ cp keys/test_key "$KEY" && chmod 600 "$KEY" || { echo "FAIL: copy keys/test_key"
 # BatchMode: fail instead of falling back to a password prompt
 SSH="ssh -i $KEY -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -p 2222 svc_backup@localhost"
 JEWEL=/srv/share/clinical/patients.csv
+# Checksums are read from the guard container, not over SSH: svc_backup naming a crown jewel
+# now makes the guard swap first, which would turn the baseline itself into the fake.
+jewel_md5() { docker compose exec -T guard md5sum "$JEWEL" | cut -d' ' -f1; }
 MINE=/srv/share/00_passwords_backup.txt
 fail() { echo "FAIL: $*"; exit 1; }
 SWAP_WAIT=${E2E_SWAP_WAIT:-10}   # seconds; generous for loaded machines (local LLM eating CPU)
@@ -30,7 +33,7 @@ docker compose exec -T guard python guard.py restore >/dev/null || fail "restore
 docker compose exec -T guard python guard.py check || fail "share not clean before start"
 docker compose exec -T guard python guard.py status | grep -A6 '"detectors"' | tr -d '
  ' ; echo
-REAL=$($SSH "md5sum $JEWEL" | cut -d' ' -f1)
+REAL=$(jewel_md5)
 
 echo "== test 1: ssh ls"
 $SSH "ls share/clinical" || fail "ssh ls"
@@ -50,20 +53,20 @@ for r in [json.loads(x) for x in open("/var/log/mirage/commands.jsonl").readline
 
 for i in $(seq 1 "$ROUNDS"); do
   echo "== round $i, test 3: open the mine -> swap"
-  t0=$(date +%s.%N)
+  t0=$(python3 -c 'import time; print(time.time())')
   # odd rounds open the mine by name (command detector), even rounds via grep -r (inotify/atime)
   if [ $((i % 2)) -eq 1 ]; then $SSH "cat $MINE" >/dev/null; else open_mine_unnamed; fi
   wait_swapped || fail "no swap after mine (round $i, waited ${SWAP_WAIT}s)"
-  t1=$(date +%s.%N)
-  NOW=$($SSH "md5sum $JEWEL" | cut -d' ' -f1)
+  t1=$(python3 -c 'import time; print(time.time())')
+  NOW=$(jewel_md5)
   [ "$NOW" != "$REAL" ] || fail "jewel still real after swap"
-  echo "swapped, seen by the attacker after $(awk "BEGIN{printf \"%.2f\", $t1 - $t0}") s; jewel now:"
+  echo "swapped, seen by the attacker after $(python3 -c "print(f'{$t1 - $t0:.2f}')") s; jewel now:"
   $SSH "head -2 $JEWEL"
 
   echo "== round $i, test 4: restore"
   docker compose exec -T guard python guard.py restore | grep -E '"restored"|leftovers' -A0
   docker compose exec -T guard python guard.py check || fail "leftovers after restore"
-  [ "$($SSH "md5sum $JEWEL" | cut -d' ' -f1)" = "$REAL" ] || fail "jewel not restored"
+  [ "$(jewel_md5)" = "$REAL" ] || fail "jewel not restored"
 done
 
 echo "== test 5: control API /contain + /restore (as core calls it, from the Docker network)"
@@ -107,7 +110,7 @@ out=$(api /restore "$TOKEN")
 echo "/restore with token -> $out"
 case "$out" in *'"leftovers": []'*) ;; *) fail "/restore left leftovers" ;; esac
 $SSH id >/dev/null || fail "svc_backup cannot log in after /restore"
-[ "$($SSH "md5sum $JEWEL" | cut -d' ' -f1)" = "$REAL" ] || fail "jewel not restored by /restore"
+[ "$(jewel_md5)" = "$REAL" ] || fail "jewel not restored by /restore"
 docker compose exec -T guard python guard.py check || fail "leftovers after /restore"
 
 echo "== test 6: the attacker can't forge, overwrite or truncate the command log"
