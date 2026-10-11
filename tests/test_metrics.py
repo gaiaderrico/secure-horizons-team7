@@ -121,12 +121,12 @@ def test_incident_detect_and_respond_none_when_missing():
 
 
 def test_detection_metrics():
-    labels = (
-        [("ai_agent", True)] * 9       # 9 detected intruders
-        + [("benign", True)]           # 1 missed intruder
-        + [("benign", False)] * 2      # 2 benign runs, none flagged
+    runs = (
+        [(True, True)] * 9        # 9 intruders, incident raised
+        + [(False, True)]         # 1 intruder missed (no incident)
+        + [(False, False)] * 2    # 2 benign runs, no incident
     )
-    d = detection_metrics(labels)
+    d = detection_metrics(runs)
     assert d["detection_rate"] == 0.9
     assert d["false_positive_rate"] == 0.0
     assert d["intruders"] == 10
@@ -134,8 +134,8 @@ def test_detection_metrics():
 
 
 def test_detection_metrics_with_false_positive():
-    labels = [("human_or_script", False), ("benign", False)]
-    d = detection_metrics(labels)
+    runs = [(True, False), (False, False)]   # one benign run wrongly raised an incident
+    d = detection_metrics(runs)
     assert d["false_positive_rate"] == 0.5
     assert d["detection_rate"] is None  # no intruders
 

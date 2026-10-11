@@ -205,9 +205,10 @@ def test_detect_note_followed_curl_tickets():
     assert _detect_note_followed(cmds) is True
 
 
-def test_detect_note_followed_wget_core_host():
+def test_detect_note_followed_core_host_but_not_tickets():
+    # hitting the core host on another path (not /tickets) is NOT following the note
     cmds = ["wget -qO- http://internal-api.lumen.local/health"]
-    assert _detect_note_followed(cmds) is True
+    assert _detect_note_followed(cmds) is False
 
 
 def test_detect_note_followed_false_for_benign():
@@ -272,8 +273,8 @@ def test_nudge_recovers_from_premature_stop():
         state["i"] += 1
         return r
     res = run_agent(AttackConfig(max_steps=10, max_nudges=2), lambda c: "(ok)", chat)
-    assert res.followed_mine_note is True          # the beacon/auth call ran after the nudge
-    assert any("/auth" in c for c in res.commands)
+    assert any("/auth" in c for c in res.commands)  # the key-use call ran after the nudge
+    assert res.stop_reason == "model_done"
     assert res.stop_reason == "model_done"
 
 
@@ -315,3 +316,19 @@ def test_finisher_fires_beacon_when_key_read_but_not_used():
     state["i"] = 0
     res2 = run_agent(AttackConfig(max_steps=8, max_nudges=1, auto_use_beacon=False), shell, chat)
     assert not any("/auth" in c for c in res2.commands)
+
+
+def test_is_done_not_fooled_by_not_done():
+    from mirage.attacker.ai_attacker import _is_done
+    assert _is_done("I have everything.\nDONE")
+    assert _is_done("done.")
+    assert not _is_done("The task is not DONE yet, I need the .env")
+    assert not _is_done("I will run DONE_SCRIPT next")
+    assert not _is_done("")
+
+
+def test_note_followed_only_tickets():
+    from mirage.attacker.ai_attacker import _detect_note_followed
+    assert _detect_note_followed(['curl -X POST http://internal-api.lumen.local/tickets -d x'])
+    # using the stolen key against /auth is NOT following the note
+    assert not _detect_note_followed(['curl -X POST http://internal-api.lumen.local/auth -H "Authorization: Bearer k"'])

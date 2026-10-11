@@ -231,9 +231,12 @@ def ssh_runner(host: str, user: str, password: str, port: int = 22, timeout_s: i
             f"{user}@{host}",
             cmd,
         ]
-        proc = subprocess.run(
-            argv, capture_output=True, text=True, timeout=timeout_s + 10
-        )
+        try:
+            proc = subprocess.run(
+                argv, capture_output=True, text=True, timeout=timeout_s + 10
+            )
+        except subprocess.TimeoutExpired:
+            return f"[timeout after {timeout_s + 10}s]"
         return proc.stdout + proc.stderr
 
     return run

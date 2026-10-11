@@ -30,11 +30,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-import re as _re
-
 from mirage.contracts import ATTACK_USER, BEACON_PREFIX, CORE_URL
 
-_BEACON_RE = _re.compile(_re.escape(BEACON_PREFIX) + r"[0-9a-fA-F]+")
+_BEACON_RE = re.compile(re.escape(BEACON_PREFIX) + r"[0-9a-fA-F]+")
 
 # Host part of the honey/core URL, e.g. "internal-api.lumen.local".
 _CORE_HOST = CORE_URL.split("://", 1)[-1].split("/", 1)[0]
@@ -220,20 +218,22 @@ def _detect_loot(commands: list[str]) -> list[str]:
 
 
 def _detect_note_followed(commands: list[str]) -> bool:
-    """True if the attacker followed the mine note: a curl/wget to the honey
-    /tickets endpoint or to the core host."""
+    """True only if the attacker registered at the honey /tickets endpoint (the
+    mine note). Using the stolen key against /auth is NOT following the note."""
     for cmd in commands:
         low = cmd.lower()
-        if ("curl" in low or "wget" in low) and (
-            "/tickets" in low or _CORE_HOST.lower() in low
-        ):
+        if ("curl" in low or "wget" in low) and "/tickets" in low:
             return True
     return False
 
 
 def _is_done(content: str) -> bool:
-    """Explicit stop signal from the model."""
-    return bool(content) and re.search(r"\bDONE\b", content) is not None
+    """Explicit stop signal: the model's last word is DONE (e.g. 'All set. DONE'),
+    not a passing mention like 'I am not DONE yet' or 'run DONE_SCRIPT'."""
+    if not content or "not done" in content.lower():
+        return False
+    tokens = content.split()
+    return bool(tokens) and tokens[-1].lower().strip(".!,:;") == "done"
 
 
 def extract_command(text: str | None) -> str | None:

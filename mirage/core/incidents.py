@@ -19,11 +19,15 @@ def group_events(events: list[Event], window_s: float = INCIDENT_WINDOW_S) -> li
     for e in events:
         by_host.setdefault(e.host, []).append(e)
 
+    # The analyst may click Contain/Restore long after the attack; those response
+    # events must stay with their incident, so they never start a new time group.
+    response_types = {"contain_done", "restore_done"}
     groups: list[list[Event]] = []
     for host_events in by_host.values():
         current: list[Event] = []
         for e in sorted(host_events, key=lambda e: e.ts):
-            if current and e.ts - current[-1].ts > window_s:
+            if (current and e.ts - current[-1].ts > window_s
+                    and e.type not in response_types):
                 groups.append(current)
                 current = []
             current.append(e)

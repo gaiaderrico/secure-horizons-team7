@@ -136,3 +136,20 @@ def test_incident_is_serialisable():
     [inc] = build_incidents(ai_attack_events())
     d = inc.to_dict()
     assert d["id"] == inc.id and len(d["events"]) == len(inc.events)
+
+
+def test_contain_restore_sticky_across_window():
+    # Analyst responds long after the attack (> INCIDENT_WINDOW_S): the status
+    # must still flip, not land in a separate dropped group.
+    from mirage.contracts import Event, INCIDENT_WINDOW_S
+    from mirage.core.incidents import build_incidents
+    base = 1_000_000.0
+    events = [
+        Event(base, "mine_opened", ref="m1", details={"path": "/x"}),
+        Event(base + 0.4, "swap_done", details={"duration_ms": 400, "files": ["cj1"]}),
+        Event(base + INCIDENT_WINDOW_S + 999, "contain_done", details={"by": "analyst"}),
+        Event(base + INCIDENT_WINDOW_S + 1200, "restore_done", details={"by": "analyst"}),
+    ]
+    incs = build_incidents(events)
+    assert len(incs) == 1
+    assert incs[0].status == "restored"

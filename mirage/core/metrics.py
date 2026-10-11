@@ -122,33 +122,26 @@ def compute_metrics(incidents: list[Incident]) -> Metrics:
 # --------------------------------------------------------------------------
 
 
-def detection_metrics(labels: list[tuple[str, bool]]) -> dict:
+def detection_metrics(runs: list[tuple[bool, bool]]) -> dict:
     """Detection rate and false-positive rate from labelled runs.
 
-    Input: a list of ``(kind, is_intruder)`` tuples, one per run.
+    Input: a list of ``(detected, is_intruder)`` tuples, one per run.
 
-    * ``kind`` is the label core produced for the run (e.g. ``"ai_agent"``,
-      ``"human_or_script"``). A run was *flagged* when ``kind`` is a real
-      intruder kind, i.e. anything other than ``"benign"`` or ``""`` (an empty
-      string / ``"benign"`` means no incident was raised).
+    * ``detected`` = an incident was actually raised (a mine/ticket/beacon fired).
+      This is the real alert signal, NOT the rhythm label: a benign user is
+      labelled ``"human_or_script"`` too, so only incident creation separates a
+      false alarm from quiet, correct benign handling.
     * ``is_intruder`` is ground truth: was this run an actual intruder?
 
     Definitions (documented because they feed the defense sheet):
 
-    * ``detection_rate`` = flagged intruders / intruders
-      (how many real attacks we caught). ``None`` if there were no intruders.
-    * ``false_positive_rate`` = flagged benign runs / benign runs
-      (how often we cried wolf). ``None`` if there were no benign runs.
+    * ``detection_rate`` = detected intruders / intruders. ``None`` if no intruders.
+    * ``false_positive_rate`` = detected benign runs / benign runs. ``None`` if no benign runs.
     """
-    not_flagged = {"benign", ""}
-
-    def flagged(kind: str) -> bool:
-        return kind not in not_flagged
-
-    intruders = [k for k, is_i in labels if is_i]
-    benign = [k for k, is_i in labels if not is_i]
-    detected = sum(1 for k in intruders if flagged(k))
-    false_positives = sum(1 for k in benign if flagged(k))
+    intruders = [d for d, is_i in runs if is_i]
+    benign = [d for d, is_i in runs if not is_i]
+    detected = sum(1 for d in intruders if d)
+    false_positives = sum(1 for d in benign if d)
 
     return {
         "intruders": len(intruders),
