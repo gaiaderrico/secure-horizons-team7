@@ -4,9 +4,11 @@
 
 *Whoever breaks in steals only fakes. And if it's an AI, it tells us who sent it.*
 
+**Who it is for:** clinics and the medical sector: private clinics and clinic groups, medical laboratories and imaging centres, starting in France. They keep patient files on shared drives, run small IT teams, often use an outsourced SOC, and are now in NIS2 scope. MIRAGE is sold to them directly and through the MSSPs that run their SOC.
+
 ## Threat scenario
 
-An attacker (human, script, or autonomous AI agent) reaches a mid-size clinic's file server with a stolen `svc_backup` credential and sets out to exfiltrate patient records and billing credentials. Data theft before encryption is now the main extortion lever (> 76% of ransomware attacks, Coveware Q3 2025), and AI agents act in seconds, faster than any analyst. MIRAGE assumes the break-in happens: the first trap file touched triggers an automatic, reversible swap of the crown jewels for AI-forged fakes, and an AI intruder is induced to reveal its mission, which is then checked against the logs.
+An attacker (human, script, or autonomous AI agent) reaches a mid-size clinic's file server with a stolen `svc_backup` credential and sets out to exfiltrate patient records and billing credentials. Health is the EU's most attacked critical sector (309 significant incidents in 2023, European Commission), healthcare breaches cost the most (USD 7.42 M, IBM 2025), data theft before encryption is now the main extortion lever (> 76% of ransomware attacks, Coveware Q3 2025), and AI agents act in seconds, faster than any analyst. MIRAGE assumes the break-in happens: the first trap file touched triggers an automatic, reversible swap of the crown jewels for AI-forged fakes, and an AI intruder is induced to reveal its mission, which is then checked against the logs.
 
 Demo company: Lumen Health, a fictional clinic chain. All data is synthetic.
 
@@ -30,17 +32,15 @@ Demo company: Lumen Health, a fictional clinic chain. All data is synthetic.
 
 ## Metrics
 
-| Metric | Result | Measured on |
+| What | Result | How it was obtained |
 |---|---|---|
-| Detection rate | **100%** (4/4 scenarios raised an incident) | 4 synthetic attack sequences: AI agent, AI guided by a human, script, human |
-| False-positive rate | **0%** (normal user and backup job not flagged) | Benign activity runs |
-| Time to respond (swap) | **~0.4 s** (0.38–0.41 s) | Synthetic attack sequences |
-| Real files lost | **0** across the attack scenarios | Synthetic attack sequences |
-| Intruder label | Correct on **4/4** (AI agent / AI-guided / human or script) | Synthetic attack sequences |
+| Detection and intruder label | Correct on **4/4** scenarios (AI agent, AI guided by a human, script, human) | Logic test on hand-written event sequences (`mirage/fakes.py`), not live attacks |
 | AI confession (note followed) | **7/10** qwen3.5:35b-a3b · **2/10** qwen2.5:7b | Live runs, local Ollama models, no API key |
 | Confession checking | Each claim tagged confirmed / unverified / **contradicted** against the logs (e.g. "authorized pentest" → contradicted) | Live runs |
+| Time to swap, real files lost | Shown on the incident card for each live run (target < 1 s, 0 real files lost) | Live demo |
+| Detection and false-positive rates at scale | **Not yet measured** | Planned for 2–3 clinic pilots |
 
-Reproduce: `python -m mirage.bench.run_bench` → `generated/bench_results.csv`. Synthetic sequences: `mirage/fakes.py`.
+The swap times in `mirage/fakes.py` are hard-coded test values, so we do not report them as measurements.
 
 ## How humans stay in control
 
@@ -59,7 +59,7 @@ The intruder label never triggers an action, so a wrong label costs nothing. The
 - The confession is a bonus layer and depends on the attacker's model; we report the rate per model.
 - If the guard is killed, commands are not logged meanwhile, but the console raises a "guard silent" heartbeat alarm.
 - A root attacker on the same machine could reach the vault; in production the vault is a separate machine or account.
-- The demo runs on one laptop with synthetic data and local models. Production maps to cloud-storage APIs, a separate vault account and the customer's SIEM.
+- Not yet tested in a real clinic; the demo runs on one laptop with synthetic data and local models. Production maps to cloud-storage APIs, a separate vault account and the customer's SIEM.
 
 ## Rules we keep
 
