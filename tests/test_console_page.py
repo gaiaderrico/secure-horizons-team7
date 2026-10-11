@@ -13,6 +13,10 @@ def test_console_page_served(tmp_path):
     assert "MIRAGE" in r.text
     assert "/incidents" in r.text
     assert "CONTAIN" in r.text.upper()
+    # Decision panel offers the "keep watching" choice, and the report can be
+    # edited by the analyst.
+    assert "Keep watching" in r.text
+    assert "Edit" in r.text
 
 
 def test_console_page_endpoints_work_end_to_end(tmp_path):
