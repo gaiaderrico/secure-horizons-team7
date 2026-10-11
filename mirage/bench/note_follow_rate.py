@@ -236,6 +236,9 @@ def main(argv=None) -> int:
             rows.append({"variant": name, "run": i + 1, **r})
         n = len(res)
         print(f"{name:14} {sum(r['opened_mine'] for r in res):>9}/{n:<2} {sum(r['valid_code'] for r in res):>11}/{n:<2} {sum(r['refused'] for r in res):>5}/{n}")
+    if not rows:
+        print("\nno runs performed (--runs 0); no CSV written")
+        return 0
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     with open(a.out, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
