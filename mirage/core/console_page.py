@@ -12,10 +12,12 @@ uncluttered:
   markdown rendered to HTML, an "AI DRAFT" ribbon (a cosmetic "Approve draft"
   button flips it to APPROVED), a static "Recommended actions" box and the NIS2
   early-warning draft in a ``<details>``;
-* the two human decisions (sticky bottom bar) — CONTAIN (red) and RESTORE
-  (green). These POST to the real control endpoints, so clicking really drives
-  the guard, and the result is made unmistakable: a prominent toast and the big
-  status word changing colour and text.
+* the two human decisions (a clean action panel directly under the top bar) —
+  CONTAIN (red) and RESTORE (green). Each first opens an in-page confirmation
+  modal; only on Confirm do they POST to the real control endpoints, so clicking
+  really drives the guard. The result is made unmistakable: the whole view is
+  re-fetched and re-rendered with the new state and a prominent (emoji-free)
+  result banner is shown, while the big status word changes colour and text.
 
 It polls ``/incidents`` (+ card + summary for the newest) every 2s and only
 rebuilds the DOM when the incident id changes, so the approve state, an open
@@ -45,7 +47,7 @@ _PAGE = r"""<!doctype html>
   html,body{margin:0}
   body{background:var(--page);color:var(--ink);
     font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
-    -webkit-font-smoothing:antialiased;padding:18px 16px 96px}
+    -webkit-font-smoothing:antialiased;padding:18px 16px 40px}
   .serif{font-family:Georgia,"Times New Roman",'Noto Serif',serif}
   .wrap{max-width:1400px;margin:0 auto}
   /* ---- top bar ---- */
@@ -111,6 +113,8 @@ _PAGE = r"""<!doctype html>
   .tl .tid{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
     font-weight:700;color:var(--accent);flex:none;width:72px}
   .tl .tid.def{color:var(--ok)}
+  .tl .clk{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
+    color:var(--muted);flex:none;width:64px;font-variant-numeric:tabular-nums}
   .tl .ty{flex:none;font-weight:700;width:96px}
   .tl .dt{color:var(--muted);flex:1;word-break:break-all}
   .tl .def-tag{flex:none;font-size:9px;font-weight:800;letter-spacing:.5px;color:var(--ok);
@@ -146,22 +150,41 @@ _PAGE = r"""<!doctype html>
     border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
   button.approve:hover{filter:brightness(1.08)}
   button.approve[disabled]{background:#eef7f0;color:var(--ok);border-color:var(--ok);cursor:default;filter:none}
-  /* ---- sticky action bar ---- */
-  .bar{position:fixed;left:0;right:0;bottom:0;z-index:30;background:rgba(255,255,255,.97);
-    border-top:1px solid var(--line);box-shadow:0 -2px 12px rgba(0,0,0,.08);
-    padding:12px 16px}
-  .bar .inner{max-width:1400px;margin:0 auto;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-  .toast{flex:1;min-width:220px;font-weight:700;font-size:14px;padding:10px 15px;border-radius:6px;
-    border:1px solid transparent;opacity:0;transition:opacity .25s}
-  .toast.show{opacity:1}
-  .toast.good{background:#eaf5ee;color:var(--ok);border-color:var(--ok)}
-  .toast.err{background:#fbecea;color:var(--bad);border-color:var(--bad)}
+  /* ---- action panel (under top bar) ---- */
+  .actions{margin-top:16px;background:var(--paper);border:1px solid var(--line);border-radius:6px;
+    box-shadow:0 1px 3px rgba(0,0,0,.06);display:flex;align-items:center;gap:14px;
+    padding:12px 16px;flex-wrap:wrap}
+  .actions .alabel{font-size:11px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;
+    color:var(--muted);flex:none}
+  .banner{flex:1;min-width:220px;font-weight:700;font-size:14px;padding:10px 15px;border-radius:6px;
+    border:1px solid transparent;display:none}
+  .banner.show{display:block}
+  .banner.good{background:#eaf5ee;color:var(--ok);border-color:var(--ok)}
+  .banner.err{background:#fbecea;color:var(--bad);border-color:var(--bad)}
+  .acts{margin-left:auto;display:flex;gap:12px}
   button.big{font-size:16px;font-weight:800;letter-spacing:1px;text-transform:uppercase;
-    padding:14px 30px;border-radius:8px;border:0;color:#fff;cursor:pointer;min-width:160px}
+    padding:12px 28px;border-radius:8px;border:0;color:#fff;cursor:pointer;min-width:150px}
   button.big.contain{background:var(--bad)} button.big.restore{background:var(--ok)}
   button.big:hover{filter:brightness(1.08)}
   button.big[disabled]{opacity:.55;cursor:default;filter:none}
   button.big.done{background:#43515a}
+  /* ---- confirmation modal ---- */
+  .modal-ov{position:fixed;inset:0;z-index:50;background:rgba(20,25,28,.45);
+    display:none;align-items:center;justify-content:center;padding:20px}
+  .modal-ov.show{display:flex}
+  .modal{background:var(--paper);border:1px solid var(--line);border-radius:8px;
+    box-shadow:0 12px 44px rgba(0,0,0,.28);max-width:460px;width:100%;padding:22px 24px}
+  .modal h3{margin:0 0 10px;font-size:18px}
+  .modal p{margin:0 0 20px;font-size:14px;line-height:1.5;color:var(--ink)}
+  .modal-btns{display:flex;justify-content:flex-end;gap:10px}
+  .mbtn{font-size:14px;font-weight:700;padding:10px 20px;border-radius:6px;cursor:pointer;
+    border:1px solid}
+  .mbtn.cancel{background:var(--paper);border-color:var(--line);color:var(--ink)}
+  .mbtn.cancel:hover{background:var(--faint)}
+  .mbtn.confirm{color:#fff;border-color:transparent}
+  .mbtn.confirm:hover{filter:brightness(1.08)}
+  .mbtn.confirm.contain{background:var(--bad)}
+  .mbtn.confirm.restore{background:var(--ok)}
   /* ---- idle ---- */
   .idle{padding:120px 40px;text-align:center}
   .idle .pulse{width:16px;height:16px;border-radius:50%;background:var(--ok);margin:0 auto 20px;
@@ -181,6 +204,14 @@ _PAGE = r"""<!doctype html>
     <span class="guard" id="guard"><span class="dot"></span><span id="guardtxt">guard ok</span></span>
     <span class="status open" id="status" style="display:none">OPEN</span>
   </div>
+  <div class="actions" id="actions" style="display:none">
+    <span class="alabel">Analyst decision</span>
+    <div class="banner" id="banner"></div>
+    <div class="acts">
+      <button class="big contain" id="btnContain" disabled>Contain</button>
+      <button class="big restore" id="btnRestore" disabled>Restore</button>
+    </div>
+  </div>
   <div id="main">
     <div class="panel"><div class="idle">
       <div class="pulse"></div>
@@ -190,11 +221,16 @@ _PAGE = r"""<!doctype html>
   </div>
 </div>
 
-<div class="bar"><div class="inner" id="barinner">
-  <div class="toast" id="toast"></div>
-  <button class="big contain" id="btnContain" disabled>Contain</button>
-  <button class="big restore" id="btnRestore" disabled>Restore</button>
-</div></div>
+<div class="modal-ov" id="modalOv">
+  <div class="modal" role="dialog" aria-modal="true">
+    <h3 id="modalTitle"></h3>
+    <p id="modalMsg"></p>
+    <div class="modal-btns">
+      <button class="mbtn cancel" id="modalCancel">Cancel</button>
+      <button class="mbtn confirm contain" id="modalConfirm">Confirm</button>
+    </div>
+  </div>
+</div>
 
 <script>
 const LV={1:["l1","Low"],2:["l2","Medium"],3:["l3","High"],4:["l4","Critical"]};
@@ -203,10 +239,17 @@ const KIND={ai_agent:"AI agent",ai_guided_by_human:"AI agent (human-guided)",
 let curId=null;        // incident currently rendered
 let curStatus=null;    // last status shown (so we only touch the DOM on change)
 let approved=false;    // cosmetic approval, reset per new incident
-let toastTimer=null;
 
 function esc(s){return (s==null?"":String(s)).replace(/[&<>"]/g,c=>(
   {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+// Unix seconds -> local HH:MM:SS for the timeline. Falls back to "--:--:--".
+function clockOf(ts){
+  const n=Number(ts);
+  if(!isFinite(n)||n<=0) return '--:--:--';
+  const d=new Date(n*1000), p=x=>String(x).padStart(2,'0');
+  return p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
+}
 
 // Small, safe markdown -> HTML. Input is escaped FIRST, so no raw HTML can pass.
 function md(src){
@@ -257,6 +300,7 @@ function renderIdle(){
     '<div class="panel"><div class="idle"><div class="pulse"></div>'+
     '<h2>No active incident</h2>'+
     '<p>System monitoring. This console populates automatically when a mine is opened.</p></div></div>';
+  document.getElementById('actions').style.display='none';
   const bc=document.getElementById('btnContain'), br=document.getElementById('btnRestore');
   bc.disabled=true; br.disabled=true; bc.className='big contain'; br.className='big restore';
   bc.textContent='Contain'; br.textContent='Restore';
@@ -296,7 +340,8 @@ function render(inc,card,summary){
     :'<div class="x" style="color:var(--muted)">No stated objective captured.</div>';
 
   const tlHtml=tl.map(e=>`
-    <li><span class="tid${e.defensive?' def':''}">${esc(e.technique_id||(e.defensive?'DEFEND':'—'))}</span>
+    <li><span class="clk">${clockOf(e.ts)}</span>
+      <span class="tid${e.defensive?' def':''}">${esc(e.technique_id||(e.defensive?'DEFEND':'—'))}</span>
       <span class="ty">${esc(e.type)}</span>
       <span class="dt">${esc(e.detail||e.ref||'')}</span>
       ${e.defensive?'<span class="def-tag">defensive</span>':''}</li>`).join('');
@@ -326,10 +371,11 @@ function render(inc,card,summary){
       </ol></div>
       <details class="nis2"><summary>NIS2 early-warning draft (Article 23)</summary>
         <div class="inner">${nis2}</div></details>
-      <button class="approve" id="approve" ${approved?'disabled':''}>${approved?'✓ Draft approved':'Approve draft'}</button>
+      <button class="approve" id="approve" ${approved?'disabled':''}>${approved?'Draft approved':'Approve draft'}</button>
     </div>`;
 
   document.getElementById('iid').textContent='Incident '+esc(inc.id);
+  document.getElementById('actions').style.display='flex';
   document.getElementById('main').innerHTML=
     `<div class="grid"><div class="col">${left}</div><div class="col">${right}</div></div>`;
   setSeverity(sv);
@@ -338,7 +384,7 @@ function render(inc,card,summary){
 
   const btn=document.getElementById('approve');
   if(btn) btn.onclick=()=>{ approved=true;
-    btn.disabled=true; btn.textContent='✓ Draft approved';
+    btn.disabled=true; btn.textContent='Draft approved';
     const r=document.querySelector('.ribbon');
     if(r){ r.className='ribbon approved';
       r.innerHTML='<b>APPROVED</b> Reviewed and signed off by analyst (demo).'; } };
@@ -350,47 +396,84 @@ function reflectButtons(status){
   const bc=document.getElementById('btnContain'), br=document.getElementById('btnRestore');
   const contained=(s==='contained'||s==='restored'), restored=(s==='restored');
   bc.disabled=contained; bc.className='big contain'+(contained?' done':'');
-  bc.textContent=contained?'✓ Contained':'Contain';
+  bc.textContent=contained?'Contained':'Contain';
   br.disabled=restored; br.className='big restore'+(restored?' done':'');
-  br.textContent=restored?'✓ Restored':'Restore';
+  br.textContent=restored?'Restored':'Restore';
 }
 
-function showToast(kind,msg){
-  const t=document.getElementById('toast');
-  t.className='toast show '+kind; t.innerHTML=msg;
-  if(toastTimer) clearTimeout(toastTimer);
-  toastTimer=setTimeout(()=>{ t.className='toast '+kind; },4000);
+// Result banner (emoji-free). Lives outside #main so a full re-render or the 2s
+// poll never wipes it; it fades out on its own after a few seconds.
+let bannerTimer=null;
+function showBanner(kind,msg){
+  const b=document.getElementById('banner');
+  b.className='banner show '+kind; b.textContent=msg;
+  if(bannerTimer) clearTimeout(bannerTimer);
+  bannerTimer=setTimeout(()=>{ b.className='banner '+kind; },6000);
 }
+
+// --- in-page confirmation modal (no window.confirm/alert) ----
+let pendingKind=null;
+function openConfirm(kind){
+  if(!curId) return;
+  pendingKind=kind;
+  const title=document.getElementById('modalTitle');
+  const msg=document.getElementById('modalMsg');
+  const cf=document.getElementById('modalConfirm');
+  if(kind==='contain'){
+    title.textContent='Contain this incident?';
+    msg.textContent="The attacker's session will be terminated and the account locked.";
+    cf.className='mbtn confirm contain'; cf.textContent='Contain';
+  }else{
+    title.textContent='Restore the real files?';
+    msg.textContent='Restore the real files for this incident?';
+    cf.className='mbtn confirm restore'; cf.textContent='Restore';
+  }
+  document.getElementById('modalOv').classList.add('show');
+}
+function closeConfirm(){
+  document.getElementById('modalOv').classList.remove('show');
+  pendingKind=null;
+}
+document.getElementById('modalCancel').onclick=closeConfirm;
+document.getElementById('modalConfirm').onclick=()=>{ const k=pendingKind; closeConfirm(); if(k) doAction(k); };
+document.getElementById('modalOv').onclick=e=>{ if(e.target.id==='modalOv') closeConfirm(); };
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeConfirm(); });
 
 async function doAction(kind){
   if(!curId) return;
+  const id=curId;
   const bc=document.getElementById('btnContain'), br=document.getElementById('btnRestore');
   bc.disabled=true; br.disabled=true;
-  let decoys=0;
   try{
-    const r=await fetch(`/incidents/${curId}/${kind}`,{method:'POST'});
+    const r=await fetch(`/incidents/${id}/${kind}`,{method:'POST'});
     if(!r.ok) throw new Error('bad status '+r.status);
     const inc=await r.json();
-    decoys=(inc.fakes_taken||[]).length;
-    setStatus(inc.status);
-    reflectButtons(inc.status);
+    // Re-fetch card + summary and FULLY re-render so the view shows the new
+    // state (timeline gains the contain/restore step, status flips, etc.).
+    const [card,summary]=await Promise.all([
+      (await fetch(`/incidents/${id}/card`)).json(),
+      (await fetch(`/incidents/${id}/summary`)).json(),
+    ]);
+    const decoys=(inc.fakes_taken||[]).length;
+    render(inc,card,summary);
     if(kind==='contain'){
-      showToast('good','✅ CONTAINED — attacker session terminated, account svc_backup locked. No new logins.');
+      showBanner('good','CONTAINED — attacker session terminated, account svc_backup locked, no new logins.');
     }else{
-      showToast('good',`✅ RESTORED — ${decoys} real file(s) returned to their location; decoys removed.`);
+      showBanner('good',`RESTORED — ${decoys} real file(s) returned to their location, decoys removed.`);
     }
   }catch(e){
-    showToast('err','⚠ Action failed (guard unreachable).');
+    showBanner('err','Action failed — guard unreachable.');
     // Re-fetch to reflect the true status regardless.
     try{
       const incs=await (await fetch('/incidents')).json();
-      const inc=incs.find(i=>i.id===curId);
+      const inc=incs.find(i=>i.id===id);
       if(inc){ setStatus(inc.status); reflectButtons(inc.status); }
+      else reflectButtons(curStatus);
     }catch(_){ reflectButtons(curStatus); }
   }
 }
-document.getElementById('btnContain').onclick=()=>doAction('contain');
-document.getElementById('btnRestore').onclick=()=>doAction('restore');
+document.getElementById('btnContain').onclick=()=>openConfirm('contain');
+document.getElementById('btnRestore').onclick=()=>openConfirm('restore');
 
 async function tick(){
   // Guard indicator (best-effort).
