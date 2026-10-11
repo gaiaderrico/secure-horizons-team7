@@ -55,8 +55,12 @@ def get_store(request: Request) -> EventStore:
 
 
 def seed_store(store: EventStore, scenario: str) -> list[int]:
-    """Load a fakes.* attack scenario. Raises KeyError for unknown names."""
-    return store.add_many(SCENARIOS[scenario]())
+    """Load a fakes.* attack scenario, anchored to ~now so the incident is 'recent'
+    and the analyst's Contain/Restore (stamped now) groups with it. Raises KeyError
+    for unknown names."""
+    import time
+    events = SCENARIOS[scenario](time.time() - 300)
+    return store.add_many(events)
 
 
 # --- /health -----------------------------------------------------------------
